@@ -1,0 +1,11 @@
+services:
+  borg-universe:
+    build:
+      context: .
+    image: borg-universe:latest
+    container_name: borg-universe
+    ports:
+      - "8000:8000"
+    environment:
+      APP_NAME: Borg Universe
+    restart: unless-stopped
