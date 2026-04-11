@@ -1,11 +1,128 @@
 services:
-  borg-universe:
+  web:
     build:
       context: .
     image: borg-universe:latest
     container_name: borg-universe
     ports:
-      - "8000:8000"
+      - "${APP_PORT:-8000}:8000"
     environment:
-      APP_NAME: Borg Universe
+      APP_NAME: ${APP_NAME:-Borg Universe}
+      APP_VERSION: ${APP_VERSION:-0.1.0}
+      APP_ENV: ${APP_ENV:-local}
+      APP_DEBUG: ${APP_DEBUG:-false}
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      BORG_ROOT: ${BORG_ROOT:-/app/BORG}
+      AGENTS_ROOT: ${AGENTS_ROOT:-/app/agents}
+      SKILLS_ROOT: ${SKILLS_ROOT:-/app/skills}
+      ARTIFACT_ROOT: ${ARTIFACT_ROOT:-/app/artifacts}
+      MCP_SERVER_URL: ${MCP_SERVER_URL:-http://mcp:9000}
+      SUPABASE_URL: ${SUPABASE_URL:-http://supabase-rest:3000}
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlLWxvY2FsLWRldiIsImlhdCI6MTczNTY4OTYwMCwiZXhwIjo0MTAyNDQ0ODAwfQ.b0GjcWDNzpg-2bV9HUT1WSyeYZO9nbeXLhZCJqCPST8}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UtbG9jYWwtZGV2IiwiaWF0IjoxNzM1Njg5NjAwLCJleHAiOjQxMDI0NDQ4MDB9.BbY6G10B6UChkgQZ7EFDc5dTzPvQ7gKPKaKQ-U1zvpY}
+    depends_on:
+      mcp:
+        condition: service_started
+      supabase-rest:
+        condition: service_started
+    volumes:
+      - ./artifacts:/app/artifacts
     restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).read()"
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  mcp:
+    build:
+      context: .
+    image: borg-universe:latest
+    container_name: borg-universe-mcp
+    command: sh -c "uvicorn mcp_server.server:app --host 0.0.0.0 --port 9000"
+    ports:
+      - "${MCP_PORT:-9000}:9000"
+    environment:
+      APP_NAME: ${APP_NAME:-Borg Universe}
+      APP_VERSION: ${APP_VERSION:-0.1.0}
+      APP_ENV: ${APP_ENV:-local}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      BORG_ROOT: ${BORG_ROOT:-/app/BORG}
+      AGENTS_ROOT: ${AGENTS_ROOT:-/app/agents}
+      SKILLS_ROOT: ${SKILLS_ROOT:-/app/skills}
+      SUPABASE_URL: ${SUPABASE_URL:-http://supabase-rest:3000}
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlLWxvY2FsLWRldiIsImlhdCI6MTczNTY4OTYwMCwiZXhwIjo0MTAyNDQ0ODAwfQ.b0GjcWDNzpg-2bV9HUT1WSyeYZO9nbeXLhZCJqCPST8}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UtbG9jYWwtZGV2IiwiaWF0IjoxNzM1Njg5NjAwLCJleHAiOjQxMDI0NDQ4MDB9.BbY6G10B6UChkgQZ7EFDc5dTzPvQ7gKPKaKQ-U1zvpY}
+    depends_on:
+      supabase-rest:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/health', timeout=2).read()"
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  supabase-db:
+    image: supabase/postgres:15.8.1.060
+    container_name: borg-universe-supabase-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_PORT: 5432
+      JWT_SECRET: ${SUPABASE_JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
+    ports:
+      - "${POSTGRES_PORT:-54322}:5432"
+    volumes:
+      - supabase-db-data:/var/lib/postgresql/data
+      - ./supabase/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U supabase_admin -h 127.0.0.1 -p 5432
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  supabase-rest:
+    image: postgrest/postgrest:v12.2.8
+    container_name: borg-universe-supabase-rest
+    environment:
+      PGRST_DB_URI: postgres://authenticator:postgres@supabase-db:5432/${POSTGRES_DB:-postgres}
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${SUPABASE_JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
+      PGRST_SERVER_PORT: 3000
+      PGRST_OPENAPI_SERVER_PROXY_URI: http://127.0.0.1:${SUPABASE_REST_PORT:-54321}
+    ports:
+      - "${SUPABASE_REST_PORT:-54321}:3000"
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - postgrest
+        - --help
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  supabase-db-data:

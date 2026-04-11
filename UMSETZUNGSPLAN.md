@@ -11,12 +11,39 @@ Das System ist spezialisiert auf konkrete Entwicklungsaufgaben rund um STM32- un
 - Supabase dient als zentrale Wissensbasis und Audit-Speicher.
 - Agenten greifen ausschliesslich ueber MCP auf Supabase zu.
 - Agenten erhalten keinen direkten Datenbank-Key.
+- Jeder zugewiesene Borg-Agent muss vor der eigentlichen Bearbeitung zuerst den Projektkontext in Supabase durchsuchen.
+- Borg-Skills und Borg-Agenten, die spaeter Supabase-Daten nutzen, muessen im System explizit registriert und ueber Manifeste gekennzeichnet werden.
 - Das lokale `BORG/`-Verzeichnis enthaelt Agenten, Skills, Regeln und Prompts.
 - Agenten und Skills werden aktiv gepflegt und ueber Manifeste beschrieben.
 - Aufgaben werden nachvollziehbar als Task-Verlauf dokumentiert.
 - Ergebnisse werden als Vorschlaege, Codefragmente, Projektdateien oder Artefakte bereitgestellt.
 - Kritische Ergebnisse gehen in einen Review-Status.
 - Keine implizite Ausfuehrung von STM32CubeMX, Nordic Toolchain, Firmware-Builds, Flash-Vorgaengen oder Shell-Kommandos.
+
+## Feste Supabase-Anforderung fuer Borg-Agenten
+
+Die Begriffe Supabase und Superbase bezeichnen in diesem Plan dieselbe zentrale Daten- und Wissensbasis.
+
+Wenn einem Agenten eine Aufgabe zugewiesen wird, ist vor jeder fachlichen Bearbeitung ein verpflichtender Projektkontext-Lookup auszufuehren.
+
+Minimaler Pflichtablauf:
+
+1. Worker weist Task einem Agenten und optional einem Skill zu.
+2. Agent startet mit einem MCP-Aufruf zur Suche nach projektbezogenen Informationen in Supabase.
+3. Der Lookup wird mit `task_id`, `agent_name`, optional `skill_name`, Suchparametern und Trefferanzahl protokolliert.
+4. Gefundene Projektdaten, Regeln, Wissenseintraege und Codebeispiele werden als Kontext fuer die Bearbeitung bereitgestellt.
+5. Wenn keine passenden Daten gefunden werden, wird dies als Task-Event dokumentiert; der Agent arbeitet nur weiter, wenn die Regeln dies erlauben oder eine Rueckfrage erstellt wurde.
+
+Die genaue Struktur der Projektabfrage, Suchparameter, Ranking-Regeln und erlaubten Supabase-Tabellen wird spaeter definiert. Der grundlegende Aufbau muss jedoch von Beginn an vorhanden sein.
+
+Erforderliche Grundbausteine:
+
+- Manifest-Feld `requires_supabase_project_lookup`
+- Manifest-Feld `allowed_supabase_scopes`
+- MCP-Tool fuer Projektkontextsuche, zunaechst als `project.search`
+- Audit-Log fuer jeden Projektkontext-Lookup
+- Task-Event-Typen `project_lookup_started`, `project_lookup_completed` und `project_lookup_empty`
+- Worker-Pruefung, die Agenten ohne erledigten Pflicht-Lookup nicht mit der eigentlichen Aufgabe fortfahren laesst
 
 ## Zielarchitektur
 
@@ -231,6 +258,8 @@ Wichtige Felder:
 - `enabled`
 - `version`
 - `maintainer`
+- `requires_supabase_project_lookup`
+- `allowed_supabase_scopes`
 - `created_at`
 - `updated_at`
 
@@ -248,6 +277,8 @@ Wichtige Felder:
 - `version`
 - `input_schema`
 - `output_schema`
+- `requires_supabase_project_lookup`
+- `allowed_supabase_scopes`
 
 ### `mcp_access_logs`
 
@@ -261,6 +292,8 @@ Wichtige Felder:
 - `query`
 - `result_count`
 - `task_id`
+- `project_id`
+- `skill_name`
 - `created_at`
 
 ### `artifacts`
@@ -283,6 +316,7 @@ Agenten greifen ueber klar definierte MCP-Tools auf die Wissensbasis zu.
 MCP-Tools fuer Version 1:
 
 ```text
+project.search
 knowledge.search
 knowledge.get_entry
 rules.search
@@ -354,7 +388,15 @@ Beispiel fuer ein Skill-Manifest:
   "name": "stm32_hal_advisor",
   "version": "0.1.0",
   "description": "Supports STM32 HAL-related development tasks using Supabase knowledge via MCP.",
+  "requires_supabase_project_lookup": true,
+  "allowed_supabase_scopes": [
+    "project_context",
+    "knowledge",
+    "rules",
+    "examples"
+  ],
   "allowed_tools": [
+    "project.search",
     "knowledge.search",
     "rules.search",
     "examples.search",
@@ -371,15 +413,55 @@ Beispiel fuer ein Skill-Manifest:
 }
 ```
 
+### Aktuell einzubindende Borg-Agenten
+
+Die folgenden lokalen Agenten aus `agents/` muessen als registrierbare Borg-Agenten aufgenommen werden. Alle Agenten sind fuer den spaeteren Supabase-Projektkontext-Lookup vorzubereiten.
+
+| Agent | Aufgabe im Borg Universe |
+|---|---|
+| `borg-queen-architect` | Architektur und Modulstruktur auf Basis von Borg-Spezifikationen planen |
+| `borg-disassembler` | Feature-Spezifikationen in strukturierte Task-Backlogs zerlegen |
+| `borg-spec-assimilator` | Borg-Spezifikationen aus bestehendem Code erstellen oder aktualisieren |
+| `borg-spec-augmentation` | Spezifikationen um fehlende Details, Edge Cases und Handoffs erweitern |
+| `borg-requirement-node` | Borg-Spezifikationen vor Implementierung auf Anforderungsqualitaet pruefen |
+| `borg-neural-implant-feature` | Produktionscode fuer ein Feature auf Basis einer Borg-Spezifikation schreiben |
+| `borg-implementation-drone` | Vorbereitete Task-Listen deterministisch ausfuehren |
+| `borg-feature-integrator` | Augmentation-Handoffs in bestehende oder neue Task-Listen integrieren |
+| `borg-cube-testing-node` | Embedded-C Unit-Tests mit Unity/CMock, CMake und CTest erstellen oder erweitern |
+| `borg-drone-diagnostic` | Python-Tests mit pytest erstellen, erweitern und debuggen |
+| `borg-regenerator` | Tests aus Borg-Spezifikationen ableiten, reparieren oder erweitern |
+| `borg-interface-readme` | Repository-README aus Projektstruktur und Spezifikationen erstellen |
+
+### Aktuell einzubindende Borg-Skills
+
+Die folgenden lokalen Skills aus `skills/` muessen als registrierbare Borg-Skills aufgenommen werden. Skills, die von einem Agenten genutzt werden, erhalten denselben Supabase-Projektkontext wie der zugewiesene Agent oder loesen einen eigenen protokollierten Lookup aus, wenn ihr Manifest dies verlangt.
+
+| Skill | Aufgabe im Borg Universe |
+|---|---|
+| `borg-acceptance-criteria-writer` | Vage Ziele in pruefbare Akzeptanzkriterien ueberfuehren |
+| `borg-augmentation` | Spezifikationen erweitern und Handoffs fuer die Task-Planung erzeugen |
+| `borg-blocker-extractor` | Fehlende Informationen, Unsicherheiten und Blocker aus Spezifikationen extrahieren |
+| `borg-collective` | Relevanten Feature-Kontext aus Borg-Spezifikationen, Quellen, Tests und Abhaengigkeiten sammeln |
+| `borg-cube-inspector` | Bestehende Borg-Spezifikationen strukturell und sprachlich pruefen |
+| `borg-cube-printer` | Neue Borg-Spezifikationen aus einer kanonischen Vorlage erstellen |
+| `borg-dependency-mapper` | Task-Abhaengigkeiten und sinnvolle Ausfuehrungsreihenfolgen bestimmen |
+| `borg-execute-tasks` | Strukturierte Task-Listen sequenziell ausfuehren |
+| `borg-sub-units` | Submodule, Entry Points und Abhaengigkeiten in Borg-Spezifikationen verwalten |
+| `borg-task-decomposer` | Borg-Spezifikationen in kleine, ausfuehrbare Tasks zerlegen |
+| `borg-task-normalizer` | Task-Dateien in eine konsistente, maschinenlesbare Struktur bringen |
+| `borg-test-mock-unit` | Embedded-C Unit-Tests mit Unity/CMock erzeugen und integrieren |
+| `borg-test-mock-unit-reviewer` | Embedded-C Unit-Tests pruefen und Projektkonventionen durchsetzen |
+
 ## Task-Lebenszyklus
 
 1. Nutzer legt eine Aufgabe an.
 2. System klassifiziert Plattform und Thema.
 3. Passender Agent oder Skill wird zugewiesen.
-4. Agent ruft ueber MCP passende Regeln, Beispiele und Wissenseintraege ab.
-5. Agent erzeugt Antwort, Vorschlag, Codefragment, Projektdatei oder Rueckfrage.
-6. Ergebnis wird im Task-Verlauf gespeichert.
-7. Ergebnis geht je nach Risiko auf `review_required`, `needs_input` oder `done`.
+4. Agent fuehrt den verpflichtenden Supabase-Projektkontext-Lookup ueber MCP aus.
+5. Agent ruft ueber MCP passende Regeln, Beispiele und Wissenseintraege ab.
+6. Agent erzeugt Antwort, Vorschlag, Codefragment, Projektdatei oder Rueckfrage.
+7. Ergebnis wird im Task-Verlauf gespeichert.
+8. Ergebnis geht je nach Risiko auf `review_required`, `needs_input` oder `done`.
 
 ## Uebersichtsseite
 
@@ -503,21 +585,27 @@ Akzeptanzkriterium:
 ### Phase 5: MCP-Server
 
 - MCP-Server implementieren
+- Tool `project.search` als grundlegenden Projektkontext-Lookup implementieren
 - Tool `knowledge.search` implementieren
 - Tool `rules.search` implementieren
 - Tool `examples.search` implementieren
 - Tool `tasks.add_event` implementieren
 - Audit-Logging implementieren
+- Protokollierung fuer `project_lookup_started`, `project_lookup_completed` und `project_lookup_empty` einfuehren
 
 Akzeptanzkriterium:
 
 - Ein Agent kann kontrolliert Wissen abrufen.
+- Ein Agent kann vor der Bearbeitung projektbezogene Informationen in Supabase suchen.
 - Jeder Zugriff wird in Supabase protokolliert.
 
 ### Phase 6: BORG-Integration
 
 - `BORG/`-Struktur anlegen
 - Manifest-Scanner implementieren
+- Bestehende lokale Agenten aus `agents/` registrierbar machen
+- Bestehende lokale Skills aus `skills/` registrierbar machen
+- Manifest-Felder fuer Supabase-Projektkontext-Lookup erfassen
 - Agenten und Skills in der App anzeigen
 - Aktivieren und Deaktivieren von Agenten/Skills ermoeglichen
 - Mock-Agent fuer erste Ende-zu-Ende-Pruefung bauen
@@ -525,6 +613,7 @@ Akzeptanzkriterium:
 Akzeptanzkriterium:
 
 - Die Anwendung erkennt lokale Agenten und Skills.
+- Agenten und Skills zeigen an, ob sie den Supabase-Projektkontext-Lookup verlangen.
 - Ein Mock-Agent kann eine Aufgabe mit MCP-Wissen bearbeiten.
 
 ### Phase 7: Agentische Bearbeitung
@@ -532,12 +621,14 @@ Akzeptanzkriterium:
 - Worker-Prozess implementieren
 - Task-Polling implementieren
 - Agenten-/Skill-Ausfuehrung anbinden
+- Pflicht-Lookup in Supabase vor Agentenbearbeitung erzwingen
 - Ergebnisse als Events und Artefakte speichern
 - Rueckfragen als `needs_input` abbilden
 
 Akzeptanzkriterium:
 
 - Eine Beispielaufgabe zu STM32 SPI wird agentisch bearbeitet.
+- Der Task-Verlauf zeigt den initialen Supabase-Projektkontext-Lookup.
 - Das Ergebnis ist nachvollziehbar und verweist auf verwendete Regeln und Wissenseintraege.
 
 ### Phase 8: UI und Pflege
@@ -580,13 +671,18 @@ Aufgaben:
 4. Tabellen fuer `tasks`, `task_events`, `knowledge_entries`, `rules` und `code_examples` definieren.
 5. Einfache Aufgabenuebersicht erstellen.
 6. `BORG/`-Grundstruktur anlegen.
-7. MCP-Tool `knowledge.search` implementieren.
-8. Mock-Agent bauen, der eine Aufgabe bearbeitet und Wissen aus Supabase nutzt.
+7. Lokale Borg-Agenten aus `agents/` und Borg-Skills aus `skills/` in den Manifest-Scanner aufnehmen.
+8. Manifest-Felder fuer `requires_supabase_project_lookup` und `allowed_supabase_scopes` definieren.
+9. MCP-Tool `project.search` als Platzhalter fuer den verpflichtenden Supabase-Projektkontext-Lookup implementieren.
+10. MCP-Tool `knowledge.search` implementieren.
+11. Mock-Agent bauen, der vor der Bearbeitung den Projektkontext-Lookup ausfuehrt und anschliessend Wissen aus Supabase nutzt.
 
 Ergebnis:
 
 - Aufgabe rein.
 - Agent arbeitet begrenzt und nachvollziehbar.
+- Borg-Agenten und Borg-Skills sind im System grundlegend registrierbar.
+- Der verpflichtende Supabase-Projektkontext-Lookup ist als Ablauf und Audit-Spur vorhanden.
 - Supabase liefert Wissen.
 - Ergebnis wird dokumentiert.
 - Keine eigenstaendige Ausfuehrung von Toolchains oder Hardwareaktionen.

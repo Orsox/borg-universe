@@ -5,7 +5,98 @@ Accept: application/json
 
 ###
 
-GET http://127.0.0.1:8000/hello/User
+GET http://127.0.0.1:8000/health
+Accept: application/json
+
+###
+
+GET http://127.0.0.1:8000/api/tasks
+Accept: application/json
+
+###
+
+POST http://127.0.0.1:8000/api/tasks
+Content-Type: application/json
+Accept: application/json
+
+{
+  "title": "Check STM32 SPI task flow",
+  "description": "Create a sample task for Phase 3 verification.",
+  "target_platform": "STM32",
+  "topic": "SPI"
+}
+
+###
+
+GET http://127.0.0.1:8000/api/knowledge?platform=STM32&peripheral=SPI
+Accept: application/json
+
+###
+
+GET http://127.0.0.1:8000/api/rules?scope=stm32
+Accept: application/json
+
+###
+
+GET http://127.0.0.1:8000/api/examples?framework=Zephyr&peripheral=SPI
+Accept: application/json
+
+###
+
+GET http://127.0.0.1:9000/health
+Accept: application/json
+
+###
+
+GET http://127.0.0.1:9000/tools
+Accept: application/json
+
+###
+
+POST http://127.0.0.1:9000/tools/knowledge.search/call
+Content-Type: application/json
+Accept: application/json
+
+{
+  "agent_name": "manual-mcp-test",
+  "arguments": {
+    "platform": "STM32",
+    "peripheral": "SPI",
+    "query": "HAL",
+    "limit": 5
+  }
+}
+
+###
+
+POST http://127.0.0.1:9000/tools/project.search/call
+Content-Type: application/json
+Accept: application/json
+
+{
+  "agent_name": "manual-mcp-test",
+  "project_id": "local",
+  "arguments": {
+    "platform": "STM32",
+    "peripheral": "SPI",
+    "query": "SPI",
+    "limit": 5
+  }
+}
+
+###
+
+POST http://127.0.0.1:8000/api/borg/sync
+Accept: application/json
+
+###
+
+GET http://127.0.0.1:8000/api/agents
+Accept: application/json
+
+###
+
+GET http://127.0.0.1:8000/api/skills
 Accept: application/json
 
 ###
