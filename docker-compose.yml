@@ -24,10 +24,16 @@ services:
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UtbG9jYWwtZGV2IiwiaWF0IjoxNzM1Njg5NjAwLCJleHAiOjQxMDI0NDQ4MDB9.BbY6G10B6UChkgQZ7EFDc5dTzPvQ7gKPKaKQ-U1zvpY}
     depends_on:
       mcp:
-        condition: service_started
+        condition: service_healthy
       supabase-rest:
         condition: service_started
     volumes:
+      - ./app:/app/app
+      - ./mcp_server:/app/mcp_server
+      - ./agents:/app/agents
+      - ./skills:/app/skills
+      - ./BORG:/app/BORG
+      - ./main.py:/app/main.py
       - ./artifacts:/app/artifacts
     restart: unless-stopped
     healthcheck:
@@ -64,12 +70,65 @@ services:
       supabase-rest:
         condition: service_started
     restart: unless-stopped
+    volumes:
+      - ./app:/app/app
+      - ./mcp_server:/app/mcp_server
+      - ./agents:/app/agents
+      - ./skills:/app/skills
+      - ./BORG:/app/BORG
+      - ./main.py:/app/main.py
     healthcheck:
       test:
         - CMD
         - python
         - -c
         - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9000/health', timeout=2).read()"
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  worker:
+    build:
+      context: .
+    image: borg-universe:latest
+    container_name: borg-universe-worker
+    command: python -m app.worker
+    environment:
+      APP_NAME: ${APP_NAME:-Borg Universe}
+      APP_VERSION: ${APP_VERSION:-0.1.0}
+      APP_ENV: ${APP_ENV:-local}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      BORG_ROOT: ${BORG_ROOT:-/app/BORG}
+      AGENTS_ROOT: ${AGENTS_ROOT:-/app/agents}
+      SKILLS_ROOT: ${SKILLS_ROOT:-/app/skills}
+      ARTIFACT_ROOT: ${ARTIFACT_ROOT:-/app/artifacts}
+      MCP_SERVER_URL: ${MCP_SERVER_URL:-http://mcp:9000}
+      WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-5}
+      WORKER_BATCH_SIZE: ${WORKER_BATCH_SIZE:-4}
+      SUPABASE_URL: ${SUPABASE_URL:-http://supabase-rest:3000}
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlLWxvY2FsLWRldiIsImlhdCI6MTczNTY4OTYwMCwiZXhwIjo0MTAyNDQ0ODAwfQ.b0GjcWDNzpg-2bV9HUT1WSyeYZO9nbeXLhZCJqCPST8}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UtbG9jYWwtZGV2IiwiaWF0IjoxNzM1Njg5NjAwLCJleHAiOjQxMDI0NDQ4MDB9.BbY6G10B6UChkgQZ7EFDc5dTzPvQ7gKPKaKQ-U1zvpY}
+    depends_on:
+      mcp:
+        condition: service_healthy
+      supabase-rest:
+        condition: service_started
+    volumes:
+      - ./app:/app/app
+      - ./mcp_server:/app/mcp_server
+      - ./agents:/app/agents
+      - ./skills:/app/skills
+      - ./BORG:/app/BORG
+      - ./main.py:/app/main.py
+      - ./artifacts:/app/artifacts
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import app.worker"
       interval: 30s
       timeout: 3s
       retries: 3

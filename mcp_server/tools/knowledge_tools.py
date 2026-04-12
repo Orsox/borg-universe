@@ -76,13 +76,31 @@ def project_search(client: SupabaseRestClient, arguments: dict[str, Any]) -> dic
         "tasks",
         query={"select": "*", "limit": str(_limit(arguments)), "order": "updated_at.desc"},
     )
+    projects = client.request(
+        "GET",
+        "projects",
+        query={"select": "*", "limit": str(_limit(arguments)), "order": "name.asc", "active": "eq.true"},
+    )
     text_query = _clean(arguments.get("query"))
     if text_query:
         tasks = [
             task for task in tasks
-            if text_query.lower() in f"{task.get('title', '')} {task.get('description', '')} {task.get('topic', '')}".lower()
+            if text_query.lower() in (
+                f"{task.get('title', '')} {task.get('description', '')} "
+                f"{task.get('topic', '')} {task.get('local_path', '')}"
+            ).lower()
         ]
-    return {"knowledge": knowledge, "rules": rules, "examples": examples, "tasks": tasks}
+        projects = [
+            project for project in projects
+            if text_query.lower() in (
+                f"{project.get('name', '')} {project.get('description', '')} "
+                f"{project.get('project_directory', '')} {project.get('project_type', '')} "
+                f"{project.get('pycharm_mcp_sse_url', '')} {project.get('pycharm_mcp_stream_url', '')} "
+                f"{project.get('default_platform', '')} {project.get('default_mcu', '')} "
+                f"{project.get('default_board', '')} {project.get('default_topic', '')}"
+            ).lower()
+        ]
+    return {"projects": projects, "knowledge": knowledge, "rules": rules, "examples": examples, "tasks": tasks}
 
 
 def optional_table_list(client: SupabaseRestClient, table: str) -> list[dict[str, Any]]:

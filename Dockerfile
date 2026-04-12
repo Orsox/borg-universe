@@ -17,7 +17,6 @@ COPY agents ./agents
 COPY skills ./skills
 COPY BORG ./BORG
 COPY main.py .
-COPY UMSETZUNGSPLAN.md .
 
 EXPOSE 8000
 

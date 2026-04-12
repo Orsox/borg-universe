@@ -54,13 +54,13 @@
 ## 🔄 Typischer Workflow
 
 ```
-borg-spec-assimilator        →  Spec erstellen / analysieren
-  ↓
+borg-queen-architect         →  Spec (borg-cube.md) & Architektur planen
+  ↓  (max. 3 Korrekturzyklen bei Review-Fehlern)
 borg-requirement-node        →  Spec reviewen & qualitätssichern
   ↓
-borg-spec-augmentation       →  Spec erweitern & lückenfüllen
+borg-spec-assimilator        →  Spec ergänzen (aus bestehendem Code)
   ↓
-borg-queen-architect         →  Architektur planen
+borg-spec-augmentation       →  Spec erweitern & lückenfüllen
   ↓
 borg-disassembler            →  Tasks ableiten
   ↓

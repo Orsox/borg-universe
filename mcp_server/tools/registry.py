@@ -117,7 +117,7 @@ def build_registry(client: SupabaseRestClient) -> ToolRegistry:
     tools = {
         "project.search": ToolDefinition(
             name="project.search",
-            description="Search project-related context across tasks, knowledge, rules, and examples.",
+            description="Search project metadata and related context across tasks, knowledge, rules, and examples.",
             input_schema={
                 "type": "object",
                 "properties": {

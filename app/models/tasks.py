@@ -28,9 +28,13 @@ TASK_STATUSES: tuple[str, ...] = (
 class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     description: str = ""
+    project_id: str | None = None
+    workflow_id: str | None = None
     target_platform: str | None = None
     target_mcu: str | None = None
     board: str | None = None
+    local_path: str | None = None
+    pycharm_mcp_enabled: bool = False
     topic: str | None = None
     requested_by: str | None = None
     assigned_agent: str | None = None

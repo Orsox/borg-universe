@@ -101,6 +101,24 @@ Provide improved text for broken sections
 Choose exactly one: READY | READY WITH MINOR FIXES | NOT READY
 Explain in 3-6 sentences.
 
+## Automation Output
+Produce a clear JSON block at the very end of your response for automated processing:
+
+```json
+{
+  "verdict": "READY" | "READY WITH MINOR FIXES" | "NOT READY",
+  "errors": [
+    {
+      "id": "REV-CRIT-###",
+      "severity": "CRITICAL",
+      "problem": "..."
+    }
+  ],
+  "retry_required": true | false
+}
+```
+Set `retry_required` to `true` if `verdict` is `NOT READY`.
+
 ## Review Rules
 
 1. **Be strict**: Do not be polite at the expense of precision. Catch every inconsistency.

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.core.config import Settings
 from app.models.borg import DEFAULT_SUPABASE_SCOPES, BorgSkill, BorgUnit
+from app.services.manifest_validation import validate_borg_manifest
 
 
 def scan_agents(settings: Settings) -> list[BorgUnit]:
@@ -69,6 +70,7 @@ def _skill_from_markdown(path: Path) -> BorgSkill:
 
 def _unit_from_manifest(path: Path) -> BorgUnit:
     manifest = json.loads(path.read_text(encoding="utf-8"))
+    validate_borg_manifest(manifest, source=str(path))
     return BorgUnit(
         name=manifest["name"],
         description=manifest.get("description", ""),
@@ -83,6 +85,7 @@ def _unit_from_manifest(path: Path) -> BorgUnit:
 
 def _skill_from_manifest(path: Path) -> BorgSkill:
     manifest = json.loads(path.read_text(encoding="utf-8"))
+    validate_borg_manifest(manifest, source=str(path))
     return BorgSkill(
         name=manifest["name"],
         description=manifest.get("description", ""),

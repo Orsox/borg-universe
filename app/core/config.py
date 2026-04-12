@@ -25,11 +25,14 @@ class Settings:
     borg_root: Path
     agents_root: Path
     skills_root: Path
+    workflows_root: Path
     artifact_root: Path
     supabase_url: str | None
     supabase_anon_key: str | None
     supabase_service_role_key: str | None
     mcp_server_url: str | None
+    worker_poll_interval_seconds: float
+    worker_batch_size: int
 
     @property
     def supabase_configured(self) -> bool:
@@ -47,9 +50,12 @@ def get_settings() -> Settings:
         borg_root=_get_path("BORG_ROOT", "./BORG"),
         agents_root=_get_path("AGENTS_ROOT", "./agents"),
         skills_root=_get_path("SKILLS_ROOT", "./skills"),
+        workflows_root=_get_path("WORKFLOWS_ROOT", "./BORG/workflows"),
         artifact_root=_get_path("ARTIFACT_ROOT", "./artifacts"),
         supabase_url=os.getenv("SUPABASE_URL") or None,
         supabase_anon_key=os.getenv("SUPABASE_ANON_KEY") or None,
         supabase_service_role_key=os.getenv("SUPABASE_SERVICE_ROLE_KEY") or None,
         mcp_server_url=os.getenv("MCP_SERVER_URL") or None,
+        worker_poll_interval_seconds=float(os.getenv("WORKER_POLL_INTERVAL_SECONDS", "5")),
+        worker_batch_size=int(os.getenv("WORKER_BATCH_SIZE", "4")),
     )

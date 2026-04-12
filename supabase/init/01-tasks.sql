@@ -2,6 +2,112 @@
 
 create extension if not exists pgcrypto with schema extensions;
 
+create table if not exists public.projects (
+  id text primary key,
+  name text not null,
+  description text not null default '',
+  project_type text not null default 'stm' check (project_type in ('stm', 'nordic', 'python')),
+  project_directory text not null default '',
+  pycharm_mcp_enabled boolean not null default false,
+  pycharm_mcp_sse_url text,
+  pycharm_mcp_stream_url text,
+  default_platform text,
+  default_mcu text,
+  default_board text,
+  default_topic text,
+  active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+alter table public.projects
+add column if not exists project_type text not null default 'stm';
+
+alter table public.projects
+add column if not exists project_directory text not null default '';
+
+alter table public.projects
+add column if not exists pycharm_mcp_enabled boolean not null default false;
+
+alter table public.projects
+add column if not exists pycharm_mcp_sse_url text;
+
+alter table public.projects
+add column if not exists pycharm_mcp_stream_url text;
+
+alter table public.projects
+add column if not exists default_platform text;
+
+alter table public.projects
+add column if not exists default_mcu text;
+
+alter table public.projects
+add column if not exists default_board text;
+
+alter table public.projects
+add column if not exists default_topic text;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'projects_project_type_check'
+  ) then
+    alter table public.projects
+    add constraint projects_project_type_check
+    check (project_type in ('stm', 'nordic', 'python'));
+  end if;
+end
+$$;
+
+insert into public.projects (
+  id,
+  name,
+  description,
+  project_type,
+  project_directory,
+  pycharm_mcp_enabled,
+  pycharm_mcp_sse_url,
+  pycharm_mcp_stream_url,
+  default_platform,
+  default_mcu,
+  default_board,
+  default_topic,
+  active
+)
+values
+  ('example-1', 'Example 1', 'First example project for the project selector', 'stm', '', false, null, null, 'STM32', null, null, null, true),
+  ('example-2', 'Example 2', 'Second example project for the project selector', 'nordic', '', false, null, null, 'Nordic', null, null, null, true),
+  (
+    'firststart',
+    'First Start',
+    'Python project prepared for PyCharm MCP controlled runtime actions.',
+    'python',
+    'D:\Workbench\firststart',
+    true,
+    'http://127.0.0.1:64769/sse',
+    'http://127.0.0.1:64769/stream',
+    'Python',
+    'CPython',
+    'PyCharm',
+    'MCP',
+    true
+  )
+on conflict (id) do update
+set
+  name = excluded.name,
+  description = excluded.description,
+  project_type = excluded.project_type,
+  project_directory = excluded.project_directory,
+  pycharm_mcp_enabled = excluded.pycharm_mcp_enabled,
+  pycharm_mcp_sse_url = excluded.pycharm_mcp_sse_url,
+  pycharm_mcp_stream_url = excluded.pycharm_mcp_stream_url,
+  default_platform = excluded.default_platform,
+  default_mcu = excluded.default_mcu,
+  default_board = excluded.default_board,
+  default_topic = excluded.default_topic,
+  active = excluded.active;
+
 do $$
 begin
   if not exists (select 1 from pg_type where typname = 'task_status') then
@@ -23,10 +129,14 @@ create table if not exists public.tasks (
   id uuid primary key default extensions.gen_random_uuid(),
   title text not null,
   description text not null default '',
+  project_id text,
+  workflow_id text,
   status public.task_status not null default 'draft',
   target_platform text,
   target_mcu text,
   board text,
+  local_path text,
+  pycharm_mcp_enabled boolean not null default false,
   topic text,
   requested_by text,
   assigned_agent text,
@@ -34,6 +144,18 @@ create table if not exists public.tasks (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.tasks
+add column if not exists project_id text;
+
+alter table public.tasks
+add column if not exists workflow_id text;
+
+alter table public.tasks
+add column if not exists local_path text;
+
+alter table public.tasks
+add column if not exists pycharm_mcp_enabled boolean not null default false;
 
 create table if not exists public.task_events (
   id uuid primary key default extensions.gen_random_uuid(),
@@ -61,10 +183,25 @@ for each row
 execute function public.set_updated_at();
 
 create index if not exists idx_tasks_status_created_at on public.tasks(status, created_at desc);
+create index if not exists idx_tasks_workflow_id on public.tasks(workflow_id);
 create index if not exists idx_task_events_task_id_created_at on public.task_events(task_id, created_at asc);
 
 alter table public.tasks enable row level security;
 alter table public.task_events enable row level security;
+alter table public.projects enable row level security;
+
+drop policy if exists "anon can read projects" on public.projects;
+create policy "anon can read projects"
+on public.projects for select
+to anon
+using (true);
+
+drop policy if exists "service role manages projects" on public.projects;
+create policy "service role manages projects"
+on public.projects for all
+to service_role
+using (true)
+with check (true);
 
 drop policy if exists "anon can read tasks" on public.tasks;
 create policy "anon can read tasks"
@@ -94,7 +231,9 @@ with check (true);
 
 grant select on public.tasks to anon, authenticated;
 grant select on public.task_events to anon, authenticated;
+grant select on public.projects to anon, authenticated;
 grant all privileges on public.tasks to service_role;
 grant all privileges on public.task_events to service_role;
+grant all privileges on public.projects to service_role;
 
 notify pgrst, 'reload schema';

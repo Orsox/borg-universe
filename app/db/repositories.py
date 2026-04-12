@@ -5,7 +5,36 @@ from typing import Any
 from app.db.supabase_client import SupabaseRestClient
 from app.models.borg import BorgSkill, BorgUnit
 from app.models.knowledge import CodeExampleCreate, KnowledgeEntryCreate, RuleCreate
+from app.models.projects import ProjectCreate
 from app.models.tasks import TaskCreate, TaskStatus
+
+
+class ProjectRepository:
+    def __init__(self, client: SupabaseRestClient) -> None:
+        self.client = client
+
+    def list_projects(self, include_inactive: bool = False) -> list[dict[str, Any]]:
+        query: dict[str, str] = {"select": "*", "order": "name.asc"}
+        if not include_inactive:
+            query["active"] = "eq.true"
+        return self.client.request("GET", "projects", query=query)
+
+    def get_project(self, project_id: str) -> dict[str, Any] | None:
+        rows = self.client.request(
+            "GET",
+            "projects",
+            query={"select": "*", "id": f"eq.{project_id}", "limit": "1"},
+        )
+        return rows[0] if rows else None
+
+    def create_project(self, project: ProjectCreate) -> dict[str, Any]:
+        return self.client.request(
+            "POST",
+            "projects",
+            query={"select": "*"},
+            body=project.model_dump(exclude_none=True),
+            prefer="return=representation",
+        )[0]
 
 
 class TaskRepository:
@@ -16,7 +45,7 @@ class TaskRepository:
         return self.client.request(
             "GET",
             "tasks",
-            query={"select": "*", "order": "created_at.desc"},
+            query={"select": "*", "order": "updated_at.desc,created_at.desc"},
         )
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:
@@ -27,12 +56,26 @@ class TaskRepository:
         )
         return rows[0] if rows else None
 
-    def create_task(self, task: TaskCreate) -> dict[str, Any]:
+    def list_by_status(self, status: TaskStatus, limit: int = 10) -> list[dict[str, Any]]:
+        return self.client.request(
+            "GET",
+            "tasks",
+            query={
+                "select": "*",
+                "status": f"eq.{status}",
+                "order": "created_at.asc",
+                "limit": str(limit),
+            },
+        )
+
+    def create_task(self, task: TaskCreate, initial_status: TaskStatus = "queued") -> dict[str, Any]:
+        body = task.model_dump(exclude_none=True)
+        body["status"] = initial_status
         row = self.client.request(
             "POST",
             "tasks",
             query={"select": "*"},
-            body=task.model_dump(exclude_none=True),
+            body=body,
             prefer="return=representation",
         )[0]
         self.add_event(
@@ -67,6 +110,20 @@ class TaskRepository:
         )
         return updated
 
+    def update_fields(self, task_id: str, fields: dict[str, Any]) -> dict[str, Any] | None:
+        previous = self.get_task(task_id)
+        if not previous or not fields:
+            return previous
+
+        rows = self.client.request(
+            "PATCH",
+            "tasks",
+            query={"select": "*", "id": f"eq.{task_id}"},
+            body=fields,
+            prefer="return=representation",
+        )
+        return rows[0] if rows else None
+
     def list_events(self, task_id: str) -> list[dict[str, Any]]:
         return self.client.request(
             "GET",
@@ -93,6 +150,39 @@ class TaskRepository:
             },
             prefer="return=representation",
         )[0]
+
+
+class ArtifactRepository:
+    def __init__(self, client: SupabaseRestClient) -> None:
+        self.client = client
+
+    def create_artifact(
+        self,
+        *,
+        task_id: str,
+        artifact_type: str,
+        path_or_storage_key: str,
+        checksum: str | None = None,
+    ) -> dict[str, Any]:
+        return self.client.request(
+            "POST",
+            "artifacts",
+            query={"select": "*"},
+            body={
+                "task_id": task_id,
+                "artifact_type": artifact_type,
+                "path_or_storage_key": path_or_storage_key,
+                "checksum": checksum,
+            },
+            prefer="return=representation",
+        )[0]
+
+    def list_for_task(self, task_id: str) -> list[dict[str, Any]]:
+        return self.client.request(
+            "GET",
+            "artifacts",
+            query={"select": "*", "task_id": f"eq.{task_id}", "order": "created_at.desc"},
+        )
 
 
 class ContentRepository:
@@ -188,3 +278,23 @@ class BorgRegistryRepository:
             prefer="return=representation",
         )
         return rows[0] if rows else None
+
+
+class McpAuditRepository:
+    def __init__(self, client: SupabaseRestClient) -> None:
+        self.client = client
+
+    def list_logs(self, filters: dict[str, str | None], limit: int = 100) -> list[dict[str, Any]]:
+        query: dict[str, str] = {
+            "select": "*",
+            "order": "created_at.desc",
+            "limit": str(limit),
+        }
+        for key in ("agent_name", "skill_name", "tool_name", "task_id", "project_id"):
+            value = filters.get(key)
+            if value:
+                query[key] = f"ilike.*{value}*" if key != "task_id" else f"eq.{value}"
+        success = filters.get("success")
+        if success in {"true", "false"}:
+            query["success"] = f"eq.{success}"
+        return self.client.request("GET", "mcp_access_logs", query=query)

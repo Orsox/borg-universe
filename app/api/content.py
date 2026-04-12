@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from html import escape
 from typing import Annotated
 from urllib.parse import parse_qs
 
@@ -11,6 +10,7 @@ from app.core.config import Settings, get_settings
 from app.db.repositories import ContentRepository
 from app.db.supabase_client import SupabaseRestClient, SupabaseRestError
 from app.models.knowledge import CodeExampleCreate, KnowledgeEntryCreate, RuleCreate, split_csv
+from app.ui import templates
 
 router = APIRouter()
 
@@ -18,6 +18,65 @@ TABLES = {
     "knowledge": "knowledge_entries",
     "rules": "rules",
     "examples": "code_examples",
+}
+
+PAGE_CONFIG = {
+    "knowledge": {
+        "heading": "Knowledge",
+        "list_path": "/knowledge",
+        "active": "knowledge",
+        "filters": ["platform", "mcu_family", "peripheral", "tags"],
+        "columns": ["title", "platform", "mcu_family", "peripheral", "tags", "updated_at"],
+        "empty_title": "No knowledge captured yet",
+        "empty_message": "Create an entry or synchronize external sources later.",
+        "fields": [
+            {"name": "title", "label": "Title", "required": True},
+            {"name": "domain", "label": "Domain"},
+            {"name": "platform", "label": "Platform"},
+            {"name": "mcu_family", "label": "MCU family"},
+            {"name": "peripheral", "label": "Peripheral"},
+            {"name": "source", "label": "Source"},
+            {"name": "quality_level", "label": "Quality"},
+            {"name": "tags", "label": "Tags"},
+            {"name": "content", "label": "Content", "type": "textarea", "rows": 6, "required": True},
+        ],
+    },
+    "rules": {
+        "heading": "Rules",
+        "list_path": "/rules",
+        "active": "rules",
+        "filters": ["scope", "severity", "applies_to"],
+        "columns": ["name", "scope", "severity", "applies_to", "updated_at"],
+        "empty_title": "No rules captured yet",
+        "empty_message": "Rules will govern agent work and reviews later.",
+        "fields": [
+            {"name": "name", "label": "Name", "required": True},
+            {"name": "scope", "label": "Scope"},
+            {"name": "severity", "label": "Severity", "default": "info"},
+            {"name": "applies_to", "label": "Applies to"},
+            {"name": "rule_text", "label": "Rule text", "type": "textarea", "rows": 6, "required": True},
+        ],
+    },
+    "examples": {
+        "heading": "Code examples",
+        "list_path": "/examples",
+        "active": "examples",
+        "filters": ["platform", "framework", "peripheral", "tags"],
+        "columns": ["title", "platform", "framework", "language", "peripheral", "tags", "updated_at"],
+        "empty_title": "No code examples captured yet",
+        "empty_message": "Code examples can later be used by agents as implementation references.",
+        "fields": [
+            {"name": "title", "label": "Title", "required": True},
+            {"name": "platform", "label": "Platform"},
+            {"name": "framework", "label": "Framework"},
+            {"name": "language", "label": "Language"},
+            {"name": "peripheral", "label": "Peripheral"},
+            {"name": "tags", "label": "Tags"},
+            {"name": "code", "label": "Code", "type": "textarea", "rows": 8, "required": True},
+            {"name": "explanation", "label": "Explanation", "type": "textarea", "rows": 4},
+            {"name": "known_limitations", "label": "Known limitations", "type": "textarea", "rows": 4},
+        ],
+    },
 }
 
 
@@ -173,7 +232,7 @@ async def delete_example(item_id: str, settings: Annotated[Settings, Depends(get
 @router.get("/knowledge", response_class=HTMLResponse)
 async def knowledge_page(request: Request, settings: Annotated[Settings, Depends(get_settings)]) -> HTMLResponse:
     filters = dict(request.query_params)
-    return _list_page("knowledge", filters, settings)
+    return _list_page(request, "knowledge", filters, settings)
 
 
 @router.post("/knowledge")
@@ -200,7 +259,7 @@ async def create_knowledge_from_form(
 @router.get("/rules", response_class=HTMLResponse)
 async def rules_page(request: Request, settings: Annotated[Settings, Depends(get_settings)]) -> HTMLResponse:
     filters = dict(request.query_params)
-    return _list_page("rules", filters, settings)
+    return _list_page(request, "rules", filters, settings)
 
 
 @router.post("/rules")
@@ -223,7 +282,7 @@ async def create_rule_from_form(
 @router.get("/examples", response_class=HTMLResponse)
 async def examples_page(request: Request, settings: Annotated[Settings, Depends(get_settings)]) -> HTMLResponse:
     filters = dict(request.query_params)
-    return _list_page("examples", filters, settings)
+    return _list_page(request, "examples", filters, settings)
 
 
 @router.post("/examples")
@@ -244,6 +303,122 @@ async def create_example_from_form(
         tags=split_csv(form.get("tags")),
     )
     _repository("examples", settings).create_item(payload)
+    return RedirectResponse("/examples", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.get("/knowledge/{item_id}/edit", response_class=HTMLResponse)
+async def edit_knowledge_page(
+    item_id: str,
+    request: Request,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> HTMLResponse:
+    return _edit_page(request, "knowledge", item_id, settings)
+
+
+@router.post("/knowledge/{item_id}/edit")
+async def update_knowledge_from_form(
+    item_id: str,
+    request: Request,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> RedirectResponse:
+    form = await _read_form(request)
+    payload = KnowledgeEntryCreate(
+        title=form.get("title", "").strip(),
+        domain=_optional(form.get("domain")),
+        platform=_optional(form.get("platform")),
+        mcu_family=_optional(form.get("mcu_family")),
+        peripheral=_optional(form.get("peripheral")),
+        content=form.get("content", "").strip(),
+        source=_optional(form.get("source")),
+        quality_level=_optional(form.get("quality_level")),
+        tags=split_csv(form.get("tags")),
+    )
+    _repository("knowledge", settings).update_item(item_id, payload)
+    return RedirectResponse("/knowledge", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/knowledge/{item_id}/delete")
+async def delete_knowledge_from_form(
+    item_id: str,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> RedirectResponse:
+    _repository("knowledge", settings).delete_item(item_id)
+    return RedirectResponse("/knowledge", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.get("/rules/{item_id}/edit", response_class=HTMLResponse)
+async def edit_rule_page(
+    item_id: str,
+    request: Request,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> HTMLResponse:
+    return _edit_page(request, "rules", item_id, settings)
+
+
+@router.post("/rules/{item_id}/edit")
+async def update_rule_from_form(
+    item_id: str,
+    request: Request,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> RedirectResponse:
+    form = await _read_form(request)
+    payload = RuleCreate(
+        name=form.get("name", "").strip(),
+        scope=_optional(form.get("scope")),
+        severity=form.get("severity", "info").strip() or "info",
+        rule_text=form.get("rule_text", "").strip(),
+        applies_to=split_csv(form.get("applies_to")),
+    )
+    _repository("rules", settings).update_item(item_id, payload)
+    return RedirectResponse("/rules", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/rules/{item_id}/delete")
+async def delete_rule_from_form(
+    item_id: str,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> RedirectResponse:
+    _repository("rules", settings).delete_item(item_id)
+    return RedirectResponse("/rules", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.get("/examples/{item_id}/edit", response_class=HTMLResponse)
+async def edit_example_page(
+    item_id: str,
+    request: Request,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> HTMLResponse:
+    return _edit_page(request, "examples", item_id, settings)
+
+
+@router.post("/examples/{item_id}/edit")
+async def update_example_from_form(
+    item_id: str,
+    request: Request,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> RedirectResponse:
+    form = await _read_form(request)
+    payload = CodeExampleCreate(
+        title=form.get("title", "").strip(),
+        platform=_optional(form.get("platform")),
+        framework=_optional(form.get("framework")),
+        language=_optional(form.get("language")),
+        peripheral=_optional(form.get("peripheral")),
+        code=form.get("code", "").strip(),
+        explanation=_optional(form.get("explanation")),
+        known_limitations=_optional(form.get("known_limitations")),
+        tags=split_csv(form.get("tags")),
+    )
+    _repository("examples", settings).update_item(item_id, payload)
+    return RedirectResponse("/examples", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/examples/{item_id}/delete")
+async def delete_example_from_form(
+    item_id: str,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> RedirectResponse:
+    _repository("examples", settings).delete_item(item_id)
     return RedirectResponse("/examples", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -281,23 +456,46 @@ def _delete_api_item(kind: str, item_id: str, settings: Settings) -> None:
         raise _handle_error(exc) from exc
 
 
-def _list_page(kind: str, filters: dict[str, str], settings: Settings) -> HTMLResponse:
+def _list_page(request: Request, kind: str, filters: dict[str, str], settings: Settings) -> HTMLResponse:
+    config = PAGE_CONFIG[kind]
     try:
         items = _repository(kind, settings).list_items(filters)
     except SupabaseRestError as exc:
-        return HTMLResponse(_page(kind.title(), f"<p class='error'>{escape(str(exc))}</p>"), status_code=503)
+        return HTMLResponse(str(exc), status_code=503)
 
-    content = _nav()
-    if kind == "knowledge":
-        content += _knowledge_form(filters)
-        content += _items_table(items, ["title", "platform", "mcu_family", "peripheral", "tags", "updated_at"])
-    elif kind == "rules":
-        content += _rule_form(filters)
-        content += _items_table(items, ["name", "scope", "severity", "applies_to", "updated_at"])
-    else:
-        content += _example_form(filters)
-        content += _items_table(items, ["title", "platform", "framework", "peripheral", "tags", "updated_at"])
-    return HTMLResponse(_page(kind.title(), content))
+    return templates.TemplateResponse(
+        request,
+        "pages/content_list.html",
+        {
+            **config,
+            "items": items,
+            "filters": filters,
+            "filter_fields": config["filters"],
+            "form_fields": config["fields"],
+            "empty_title": config["empty_title"],
+            "empty_message": config["empty_message"],
+        },
+    )
+
+
+def _edit_page(request: Request, kind: str, item_id: str, settings: Settings) -> HTMLResponse:
+    config = PAGE_CONFIG[kind]
+    try:
+        item = _repository(kind, settings).get_item(item_id)
+    except SupabaseRestError as exc:
+        return HTMLResponse(str(exc), status_code=503)
+    if not item:
+        return HTMLResponse("Item not found", status_code=404)
+
+    return templates.TemplateResponse(
+        request,
+        "pages/content_edit.html",
+        {
+            **config,
+            "item": item,
+            "form_fields": config["fields"],
+        },
+    )
 
 
 async def _read_form(request: Request) -> dict[str, str]:
@@ -310,155 +508,3 @@ def _optional(value: str | None) -> str | None:
         return None
     value = value.strip()
     return value or None
-
-
-def _nav() -> str:
-    return """
-    <nav>
-      <a href="/tasks">Tasks</a>
-      <a href="/knowledge">Knowledge</a>
-      <a href="/rules">Rules</a>
-      <a href="/examples">Examples</a>
-    </nav>
-    """
-
-
-def _knowledge_form(filters: dict[str, str]) -> str:
-    return f"""
-    <section>
-      <h1>Knowledge</h1>
-      {_filter_form('/knowledge', ['platform', 'mcu_family', 'peripheral', 'tags'], filters)}
-      <form method="post" action="/knowledge">
-        <label>Title <input name="title" required maxlength="240"></label>
-        <div class="grid">
-          <label>Domain <input name="domain"></label>
-          <label>Platform <input name="platform"></label>
-          <label>MCU family <input name="mcu_family"></label>
-          <label>Peripheral <input name="peripheral"></label>
-          <label>Source <input name="source"></label>
-          <label>Quality <input name="quality_level"></label>
-        </div>
-        <label>Content <textarea name="content" rows="5" required></textarea></label>
-        <label>Tags <input name="tags" placeholder="stm32, spi, hal"></label>
-        <button type="submit">Create knowledge entry</button>
-      </form>
-    </section>
-    """
-
-
-def _rule_form(filters: dict[str, str]) -> str:
-    return f"""
-    <section>
-      <h1>Rules</h1>
-      {_filter_form('/rules', ['scope', 'severity', 'applies_to'], filters)}
-      <form method="post" action="/rules">
-        <label>Name <input name="name" required maxlength="240"></label>
-        <div class="grid">
-          <label>Scope <input name="scope"></label>
-          <label>Severity <input name="severity" value="info"></label>
-          <label>Applies to <input name="applies_to" placeholder="STM32, HAL"></label>
-        </div>
-        <label>Rule text <textarea name="rule_text" rows="5" required></textarea></label>
-        <button type="submit">Create rule</button>
-      </form>
-    </section>
-    """
-
-
-def _example_form(filters: dict[str, str]) -> str:
-    return f"""
-    <section>
-      <h1>Examples</h1>
-      {_filter_form('/examples', ['platform', 'framework', 'peripheral', 'tags'], filters)}
-      <form method="post" action="/examples">
-        <label>Title <input name="title" required maxlength="240"></label>
-        <div class="grid">
-          <label>Platform <input name="platform"></label>
-          <label>Framework <input name="framework"></label>
-          <label>Language <input name="language"></label>
-          <label>Peripheral <input name="peripheral"></label>
-        </div>
-        <label>Code <textarea name="code" rows="7" required></textarea></label>
-        <label>Explanation <textarea name="explanation" rows="3"></textarea></label>
-        <label>Known limitations <textarea name="known_limitations" rows="3"></textarea></label>
-        <label>Tags <input name="tags" placeholder="nordic, zephyr, spi"></label>
-        <button type="submit">Create code example</button>
-      </form>
-    </section>
-    """
-
-
-def _filter_form(action: str, fields: list[str], filters: dict[str, str]) -> str:
-    inputs = "".join(
-        f"<label>{escape(field.replace('_', ' ').title())} "
-        f"<input name='{escape(field)}' value='{escape(filters.get(field, ''))}'></label>"
-        for field in fields
-    )
-    return f"""
-    <form method="get" action="{escape(action)}" class="filters">
-      <div class="grid">{inputs}</div>
-      <button type="submit">Search</button>
-      <a href="{escape(action)}">Clear</a>
-    </form>
-    """
-
-
-def _items_table(items: list[dict], columns: list[str]) -> str:
-    header = "".join(f"<th>{escape(column.replace('_', ' ').title())}</th>" for column in columns)
-    rows = "".join(_item_row(item, columns) for item in items)
-    if not rows:
-        rows = f"<tr><td colspan='{len(columns)}'>No entries found.</td></tr>"
-    return f"""
-    <section>
-      <h2>Entries</h2>
-      <table>
-        <thead><tr>{header}</tr></thead>
-        <tbody>{rows}</tbody>
-      </table>
-    </section>
-    """
-
-
-def _item_row(item: dict, columns: list[str]) -> str:
-    cells = ""
-    for column in columns:
-        value = item.get(column)
-        if isinstance(value, list):
-            value = ", ".join(value)
-        cells += f"<td>{escape(str(value or ''))}</td>"
-    return f"<tr>{cells}</tr>"
-
-
-def _page(title: str, content: str) -> str:
-    return f"""
-    <!doctype html>
-    <html lang="en">
-    <head>
-      <meta charset="utf-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1">
-      <title>{escape(title)} - Borg Universe</title>
-      <style>
-        body {{ margin: 0; font-family: Arial, sans-serif; color: #1b1f23; background: #f6f8fa; }}
-        main {{ max-width: 1120px; margin: 0 auto; padding: 32px 20px; }}
-        nav {{ display: flex; gap: 16px; margin-bottom: 24px; }}
-        section {{ margin-bottom: 32px; }}
-        h1, h2 {{ margin: 0 0 16px; }}
-        form, table {{ background: #fff; border: 1px solid #d8dee4; border-radius: 8px; }}
-        form {{ padding: 16px; margin-bottom: 16px; }}
-        .filters {{ background: #eef2f5; }}
-        label {{ display: block; margin-bottom: 12px; font-weight: 600; }}
-        input, textarea {{ box-sizing: border-box; width: 100%; margin-top: 6px; padding: 10px; border: 1px solid #d0d7de; border-radius: 6px; font: inherit; }}
-        button {{ padding: 10px 14px; border: 0; border-radius: 6px; background: #116329; color: #fff; font: inherit; cursor: pointer; }}
-        table {{ width: 100%; border-collapse: collapse; overflow: hidden; }}
-        th, td {{ padding: 12px; border-bottom: 1px solid #d8dee4; text-align: left; vertical-align: top; }}
-        th {{ background: #eef2f5; }}
-        .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }}
-        .error {{ padding: 12px; border: 1px solid #cf222e; border-radius: 6px; background: #ffebe9; color: #cf222e; }}
-        a {{ color: #0969da; }}
-      </style>
-    </head>
-    <body>
-      <main>{content}</main>
-    </body>
-    </html>
-    """

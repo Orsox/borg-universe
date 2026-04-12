@@ -75,7 +75,7 @@ Accept: application/json
 
 {
   "agent_name": "manual-mcp-test",
-  "project_id": "local",
+  "project_id": "beispiel-1",
   "arguments": {
     "platform": "STM32",
     "peripheral": "SPI",
@@ -97,6 +97,11 @@ Accept: application/json
 ###
 
 GET http://127.0.0.1:8000/api/skills
+Accept: application/json
+
+###
+
+POST http://127.0.0.1:8000/api/tasks/{{task_id}}/queue
 Accept: application/json
 
 ###
