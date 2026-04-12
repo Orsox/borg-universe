@@ -1,0 +1,8 @@
+<section class="status-strip" aria-label="Status overview">
+  {% for metric in metrics %}
+  <div class="metric">
+    <span>{{ metric.label }}</span>
+    <strong>{{ metric.value }}</strong>
+  </div>
+  {% endfor %}
+</section>

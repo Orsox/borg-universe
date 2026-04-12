@@ -1,0 +1,32 @@
+{% extends "ui_template.html" %}
+
+{% block title %}Edit {{ heading }} - Borg Universe{% endblock %}
+{% block eyebrow %}Edit{% endblock %}
+{% block heading %}Edit {{ heading }}{% endblock %}
+{% block summary %}Changes are stored directly in the local Supabase instance for non-production use.{% endblock %}
+{% block page_actions %}<a class="button secondary" href="{{ list_path }}">Back</a>{% endblock %}
+
+{% block content %}
+<section class="section panel">
+  <div class="panel-header"><h2>Entry</h2></div>
+  <div class="panel-body">
+    <form method="post" action="{{ list_path }}/{{ item.id }}/edit">
+      <div class="form-grid">
+        {% for field in form_fields %}
+        <label class="{{ 'full' if field.type == 'textarea' else '' }}">{{ field.label }}
+          {% if field.type == "textarea" %}
+          <textarea name="{{ field.name }}" rows="{{ field.rows|default(4) }}" {% if field.required %}required{% endif %}>{{ item.get(field.name)|csv }}</textarea>
+          {% else %}
+          <input name="{{ field.name }}" value="{{ item.get(field.name)|csv }}" {% if field.required %}required{% endif %}>
+          {% endif %}
+        </label>
+        {% endfor %}
+      </div>
+      <div class="actions">
+        <button type="submit">Save</button>
+        <a class="button secondary" href="{{ list_path }}">Cancel</a>
+      </div>
+    </form>
+  </div>
+</section>
+{% endblock %}

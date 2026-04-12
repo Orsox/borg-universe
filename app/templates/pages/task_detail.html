@@ -1,0 +1,109 @@
+{% extends "ui_template.html" %}
+
+{% block title %}{{ task.title }} - Borg Universe{% endblock %}
+{% block eyebrow %}Aufgabe{% endblock %}
+{% block heading %}{{ task.title }}{% endblock %}
+{% block summary %}Status, project, Supabase lookup, history, and result artifacts for this task.{% endblock %}
+{% block page_actions %}
+<a class="button secondary" href="/tasks">Back</a>
+{% if task.status == "review_required" %}
+<a class="button" href="/tasks/{{ task.id }}/review">Review task</a>
+{% endif %}
+<form class="inline-form" method="post" action="/tasks/{{ task.id }}/queue"><button type="submit">Queue</button></form>
+<form class="inline-form" method="post" action="/tasks/{{ task.id }}/mock-agent-run"><button type="submit" class="secondary">Mock-Agent</button></form>
+{% endblock %}
+
+{% block content %}
+<section class="layout">
+  <div>
+    <section class="section panel">
+      <div class="panel-header">
+        <h2>Details</h2>
+        <span class="badge {{ task.status|badge_class }}">{{ task.status }}</span>
+      </div>
+      <div class="panel-body">
+        <form method="post" action="/tasks/{{ task.id }}/status">
+          <div class="form-grid">
+            <label>Status
+              <select name="status">
+                {% for status in statuses %}
+                <option value="{{ status }}" {% if status == task.status %}selected{% endif %}>{{ status }}</option>
+                {% endfor %}
+              </select>
+            </label>
+          </div>
+          <div class="actions"><button type="submit">Save status</button></div>
+        </form>
+        <dl class="detail-list">
+          {% for label, key in detail_fields %}
+          <dt>{{ label }}</dt>
+          <dd>
+            {% if key == "project_id" and task.get(key) %}
+                <span class="badge done">{{ project_labels.get(task.get(key), task.get(key)) }}</span>
+            {% elif key == "workflow_id" and task.get(key) %}
+                <span class="badge queued">{{ workflow_labels.get(task.get(key), task.get(key)) }}</span>
+            {% elif key == "pycharm_mcp_enabled" %}
+                <span class="badge {{ 'done' if task.get(key) else 'queued' }}">{{ "yes" if task.get(key) else "no" }}</span>
+            {% else %}
+              {{ task.get(key) or "" }}
+            {% endif %}
+          </dd>
+          {% endfor %}
+        </dl>
+      </div>
+    </section>
+
+    <section class="section panel">
+      <div class="panel-header"><h2>History</h2></div>
+      <div class="panel-body">
+        <ol class="timeline">
+          {% for event in events|reverse %}
+          <li class="timeline-item">
+            <time class="timeline-time">{{ event.created_at }}</time>
+            <div>
+              <h3>{{ event.event_type }}</h3>
+              <p>{{ event.message }}</p>
+              {% if event.payload %}<pre>{{ event.payload }}</pre>{% endif %}
+            </div>
+          </li>
+          {% else %}
+          <li>{% include "partials/empty.html" with context %}</li>
+          {% endfor %}
+        </ol>
+      </div>
+    </section>
+  </div>
+
+  <aside>
+    <section class="section panel">
+      <div class="panel-header"><h2>Supabase lookup</h2></div>
+      <div class="panel-body">
+        <dl class="detail-list">
+          <dt>Required</dt><dd><span class="badge done">active</span></dd>
+          <dt>MCP audit</dt><dd><a href="/audit?task_id={{ task.id }}">Show logs</a></dd>
+        </dl>
+      </div>
+    </section>
+
+    <section class="section panel">
+      <div class="panel-header"><h2>Artifacts</h2></div>
+      <div class="panel-body">
+        <ol class="timeline">
+          {% for artifact in artifacts %}
+          <li class="timeline-item">
+            <time class="timeline-time">{{ artifact.created_at }}</time>
+            <div>
+              <h3>{{ artifact.artifact_type }}</h3>
+              <p>{{ artifact.path_or_storage_key }}</p>
+              {% if artifact.checksum %}<p class="muted">{{ artifact.checksum }}</p>{% endif %}
+            </div>
+          </li>
+          {% else %}
+          <li>{% include "partials/empty.html" with context %}</li>
+          {% endfor %}
+        </ol>
+      </div>
+    </section>
+  </aside>
+</section>
+{% endblock %}

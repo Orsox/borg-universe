@@ -1,0 +1,17 @@
+{
+  "agent_selection": {
+    "agent_system": "local_model",
+    "agent_name": "borg-cpu",
+    "notes": null
+  },
+  "local_model": {
+    "ip_address": "host.docker.internal",
+    "port": 12345,
+    "api_key": "lmstudio",
+    "model_name": "borg-cpu"
+  },
+  "execution": {
+    "max_parallel_tasks": 4
+  },
+  "updated_at": "2026-04-12T07:11:44.185856+00:00"
+}

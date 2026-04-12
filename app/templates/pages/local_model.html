@@ -1,0 +1,75 @@
+{% extends "ui_template.html" %}
+
+{% block title %}Local Model - Borg Universe{% endblock %}
+{% block eyebrow %}Orchestration{% endblock %}
+{% block heading %}Local model configuration{% endblock %}
+{% block summary %}Store the connection data for a locally hosted model endpoint that can be used by the node.{% endblock %}
+{% block page_actions %}
+<a class="button secondary" href="/orchestration">Agent selection</a>
+{% endblock %}
+
+{% block content %}
+{% include "partials/status_strip.html" %}
+
+<section class="section panel">
+  <div class="panel-header">
+    <h2>Model endpoint</h2>
+    <span class="badge done">{{ settings.local_model.ip_address }}:{{ settings.local_model.port }}</span>
+  </div>
+  <div class="panel-body">
+    <form method="post" action="/orchestration/local-model">
+      <div class="form-grid">
+        <label>Host
+          <input name="ip_address" value="{{ settings.local_model.ip_address }}" required maxlength="253">
+        </label>
+        <label>Port
+          <input name="port" type="number" min="1" max="65535" value="{{ settings.local_model.port }}" required>
+        </label>
+        <label class="full">API key
+          <input name="api_key" value="{{ settings.local_model.api_key or '' }}" maxlength="200" placeholder="Optional">
+        </label>
+        <label class="full">Model name
+          <input name="model_name" value="{{ settings.local_model.model_name or '' }}" maxlength="120" placeholder="Optional model identifier">
+        </label>
+      </div>
+      <div class="actions">
+        <button type="submit">Save local model</button>
+      </div>
+    </form>
+  </div>
+</section>
+
+<section class="section panel">
+  <div class="panel-header">
+    <h2>Stored values</h2>
+  </div>
+  <div class="panel-body">
+    <dl class="detail-list">
+      <dt>Host</dt><dd>{{ settings.local_model.ip_address }}</dd>
+      <dt>Port</dt><dd>{{ settings.local_model.port }}</dd>
+      <dt>API key</dt><dd>{{ "configured" if settings.local_model.api_key else "not set" }}</dd>
+      <dt>Model name</dt><dd>{{ settings.local_model.model_name or "Not set" }}</dd>
+      <dt>Updated</dt><dd>{{ settings.updated_at or "Never" }}</dd>
+    </dl>
+  </div>
+</section>
+
+<section class="section panel">
+  <div class="panel-header">
+    <h2>Prompt test</h2>
+    <span class="badge queued">local request</span>
+  </div>
+  <div class="panel-body">
+    <form method="post" action="/api/orchestration/local-model/test">
+      <div class="form-grid">
+        <label class="full">Prompt
+          <textarea name="prompt" rows="4">Antworte mir mit einem einfachen Hallo</textarea>
+        </label>
+      </div>
+      <div class="actions">
+        <button type="submit">Send prompt</button>
+      </div>
+    </form>
+  </div>
+</section>
+{% endblock %}

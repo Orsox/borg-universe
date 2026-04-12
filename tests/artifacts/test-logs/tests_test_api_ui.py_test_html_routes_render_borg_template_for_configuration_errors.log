@@ -1,0 +1,6 @@
+2026-04-12 06:28:47,245 DEBUG [asyncio] Using proactor: IocpProactor
+2026-04-12 06:28:47,247 INFO [httpx] HTTP Request: GET http://testserver/tasks "HTTP/1.1 503 Service Unavailable"
+2026-04-12 06:31:37,692 DEBUG [asyncio] Using proactor: IocpProactor
+2026-04-12 06:31:37,694 INFO [httpx] HTTP Request: GET http://testserver/tasks "HTTP/1.1 503 Service Unavailable"
+2026-04-12 06:32:56,719 DEBUG [asyncio] Using proactor: IocpProactor
+2026-04-12 06:32:56,720 INFO [httpx] HTTP Request: GET http://testserver/tasks "HTTP/1.1 503 Service Unavailable"

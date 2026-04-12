@@ -1,0 +1,133 @@
+{% extends "ui_template.html" %}
+
+{% block title %}Tasks - Borg Universe{% endblock %}
+{% block eyebrow %}Tasks{% endblock %}
+{% block heading %}Task control{% endblock %}
+{% block summary %}Create tasks, queue them, and follow worker history through review or questions.{% endblock %}
+{% block page_actions %}
+<a class="button secondary" href="/audit">Review MCP audit</a>
+{% endblock %}
+
+{% block content %}
+{% include "partials/status_strip.html" %}
+
+<section class="section panel">
+  <div class="panel-header">
+    <h2>New task</h2>
+    <span class="badge done">Supabase lookup required</span>
+  </div>
+  <div class="panel-body">
+    <form method="post" action="/tasks">
+      <div class="form-grid">
+        <label class="full">Project
+          <select name="project_id" id="project-select" required>
+            <option value="">Please select a project</option>
+            {% for project in projects %}
+            <option
+              value="{{ project.id }}"
+              data-platform="{{ project.default_platform or '' }}"
+              data-mcu="{{ project.default_mcu or '' }}"
+              data-board="{{ project.default_board or '' }}"
+              data-topic="{{ project.default_topic or '' }}"
+              data-local-path="{{ project.project_directory or '' }}"
+              data-pycharm-mcp="{{ '1' if project.pycharm_mcp_enabled else '' }}"
+            >{{ project.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="full">Workflow
+          <select name="workflow_id" required>
+            <option value="">Please select a workflow</option>
+            {% for workflow in workflows %}
+            <option value="{{ workflow.id }}">{{ workflow.title }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="full">Description
+          <textarea name="description" rows="4" required></textarea>
+        </label>
+        <label>Platform <input name="target_platform" data-project-default="platform" readonly></label>
+        <label>MCU <input name="target_mcu" data-project-default="mcu" readonly></label>
+        <label>Board <input name="board" data-project-default="board" readonly></label>
+        <label class="full">Local path <input name="local_path" data-project-default="localPath" readonly></label>
+        <input type="hidden" name="pycharm_mcp_enabled" data-project-default="pycharmMcpValue">
+        <label class="check-option full">
+          <input type="checkbox" data-project-default="pycharmMcp" disabled>
+          <span>PyCharm MCP</span>
+        </label>
+        <label>Requested by <input name="requested_by"></label>
+      </div>
+      <div class="actions">
+        <button type="submit">Create task</button>
+      </div>
+    </form>
+  </div>
+</section>
+
+<section class="section">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Title</th>
+          <th>Status</th>
+          <th>Project</th>
+          <th>Workflow</th>
+          <th>Local path</th>
+          <th>PyCharm MCP</th>
+          <th>Updated</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for task in tasks %}
+        <tr>
+          <td><a href="/tasks/{{ task.id }}">{{ task.title }}</a></td>
+          <td><span class="badge {{ task.status|badge_class }}">{{ task.status }}</span></td>
+          <td>{{ project_labels.get(task.project_id, task.project_id or "") }}</td>
+          <td>{{ workflow_labels.get(task.workflow_id, task.workflow_id or "") }}</td>
+          <td><code>{{ task.local_path or "" }}</code></td>
+          <td><span class="badge {{ 'done' if task.pycharm_mcp_enabled else 'queued' }}">{{ "yes" if task.pycharm_mcp_enabled else "no" }}</span></td>
+          <td>{{ task.updated_at or "" }}</td>
+          <td>
+            {% if task.status == "review_required" %}
+            <a class="button secondary" href="/tasks/{{ task.id }}/review">Review</a>
+            {% else %}
+            <form class="inline-form" method="post" action="/tasks/{{ task.id }}/queue">
+              <button type="submit" class="secondary">Queue</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8">{% include "partials/empty.html" with context %}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+<script>
+  const projectSelect = document.getElementById("project-select");
+  const defaultFields = {
+    platform: document.querySelector('[data-project-default="platform"]'),
+    mcu: document.querySelector('[data-project-default="mcu"]'),
+    board: document.querySelector('[data-project-default="board"]'),
+    localPath: document.querySelector('[data-project-default="localPath"]'),
+    pycharmMcp: document.querySelector('[data-project-default="pycharmMcp"]'),
+    pycharmMcpValue: document.querySelector('[data-project-default="pycharmMcpValue"]'),
+  };
+
+  function applyProjectDefaults() {
+    const option = projectSelect.options[projectSelect.selectedIndex];
+    defaultFields.platform.value = option ? option.dataset.platform || "" : "";
+    defaultFields.mcu.value = option ? option.dataset.mcu || "" : "";
+    defaultFields.board.value = option ? option.dataset.board || "" : "";
+    defaultFields.localPath.value = option ? option.dataset.localPath || "" : "";
+    defaultFields.pycharmMcp.checked = Boolean(option && option.dataset.pycharmMcp);
+    defaultFields.pycharmMcpValue.value = defaultFields.pycharmMcp.checked ? "on" : "";
+  }
+
+  projectSelect.addEventListener("change", applyProjectDefaults);
+  applyProjectDefaults();
+</script>
+{% endblock %}

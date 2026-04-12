@@ -1,0 +1,12 @@
+2026-04-12 06:28:47,063 DEBUG [asyncio] Using proactor: IocpProactor
+2026-04-12 06:28:47,065 INFO [httpx] HTTP Request: POST http://testserver/orchestration "HTTP/1.1 303 See Other"
+2026-04-12 06:28:47,065 DEBUG [asyncio] Using proactor: IocpProactor
+2026-04-12 06:28:47,075 INFO [httpx] HTTP Request: GET http://testserver/orchestration "HTTP/1.1 200 OK"
+2026-04-12 06:31:37,535 DEBUG [asyncio] Using proactor: IocpProactor
+2026-04-12 06:31:37,538 INFO [httpx] HTTP Request: POST http://testserver/orchestration "HTTP/1.1 303 See Other"
+2026-04-12 06:31:37,538 DEBUG [asyncio] Using proactor: IocpProactor
+2026-04-12 06:31:37,548 INFO [httpx] HTTP Request: GET http://testserver/orchestration "HTTP/1.1 200 OK"
+2026-04-12 06:32:56,562 DEBUG [asyncio] Using proactor: IocpProactor
+2026-04-12 06:32:56,564 INFO [httpx] HTTP Request: POST http://testserver/orchestration "HTTP/1.1 303 See Other"
+2026-04-12 06:32:56,564 DEBUG [asyncio] Using proactor: IocpProactor
+2026-04-12 06:32:56,574 INFO [httpx] HTTP Request: GET http://testserver/orchestration "HTTP/1.1 200 OK"

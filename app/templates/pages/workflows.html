@@ -1,0 +1,55 @@
+{% extends "ui_template.html" %}
+
+{% block title %}Workflows - Borg Universe{% endblock %}
+{% block eyebrow %}Workflows{% endblock %}
+{% block heading %}Workflow collective{% endblock %}
+{% block summary %}YAML-based workflow definitions with one detail page per workflow for the full execution view and source editor.{% endblock %}
+{% block page_actions %}
+<a class="button" href="/workflows/settings">Define workflows</a>
+<a class="button secondary" href="/api/workflows">View API</a>
+{% endblock %}
+
+{% block notices %}
+<div class="callout">
+  <strong>Workflow storage:</strong>
+  Definitions are read as <code>.yml</code> or <code>.yaml</code> files under <code>BORG/workflows</code>.
+</div>
+{% endblock %}
+
+{% block content %}
+{% include "partials/status_strip.html" %}
+
+<section class="section panel">
+  <div class="panel-header">
+    <h2>Workflow list</h2>
+    <span class="badge done">{{ workflow_count }}</span>
+  </div>
+  <div class="panel-body">
+    {% if workflows %}
+    <div class="layout" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">
+      {% for workflow in workflows %}
+      <article class="workflow-node">
+        <div class="workflow-node-header">
+          <div>
+            <h3><a href="/workflows/{{ workflow.id }}">{{ workflow.title }}</a></h3>
+            <p class="summary">{{ workflow.description }}</p>
+          </div>
+          <span class="badge {{ workflow.status|badge_class }}">{{ workflow.status }}</span>
+        </div>
+        <dl class="workflow-node-meta">
+          <dt>Workflow</dt><dd>{{ workflow.id }}</dd>
+          <dt>Start node</dt><dd>{{ workflow.entry_node }}</dd>
+          <dt>Source</dt><dd>{{ workflow.source_file or "" }}</dd>
+        </dl>
+        <div class="actions">
+          <a class="button secondary" href="/workflows/{{ workflow.id }}">Open detail</a>
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+    {% else %}
+    {% include "partials/empty.html" with context %}
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

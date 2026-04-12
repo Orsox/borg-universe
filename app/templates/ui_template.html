@@ -1,0 +1,616 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ title|default("Borg Universe") }} - Borg Universe{% endblock %}</title>
+  <style>
+    :root {
+      --bg: #080b09;
+      --surface: #111713;
+      --surface-muted: #18201b;
+      --surface-strong: #050706;
+      --text: #d7e2da;
+      --text-muted: #8ea298;
+      --line: #2a3a32;
+      --line-strong: #537060;
+      --primary: #1d7f3d;
+      --primary-hover: #25a651;
+      --accent: #79d28e;
+      --warning: #d2a84b;
+      --danger: #d95c5c;
+      --success: #58c879;
+      --copper: #b06f3c;
+      --steel: #9ba8a0;
+      --radius: 4px;
+      --shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+      --focus: 0 0 0 3px rgba(121, 210, 142, 0.28);
+      --max: 1240px;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background:
+        linear-gradient(rgba(121, 210, 142, 0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(121, 210, 142, 0.035) 1px, transparent 1px),
+        radial-gradient(circle at 76% 8%, rgba(176, 111, 60, 0.16), transparent 28%),
+        radial-gradient(circle at 15% 92%, rgba(121, 210, 142, 0.13), transparent 24%),
+        var(--bg);
+      background-size: 32px 32px, 32px 32px, auto, auto, auto;
+      color: var(--text);
+      font-family: Arial, Helvetica, sans-serif;
+      line-height: 1.45;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    button, input, select, textarea { font: inherit; }
+    button, .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 40px;
+      padding: 9px 14px;
+      border: 1px solid transparent;
+      border-radius: var(--radius);
+      background: var(--primary);
+      color: #f4fff6;
+      cursor: pointer;
+      font-weight: 700;
+      text-decoration: none;
+      text-transform: uppercase;
+    }
+    button:hover, .button:hover {
+      background: var(--primary-hover);
+      box-shadow: 0 0 18px rgba(37, 166, 81, 0.28);
+      text-decoration: none;
+    }
+    .button.secondary, button.secondary {
+      background: var(--surface);
+      color: var(--text);
+      border-color: var(--line-strong);
+    }
+    .button.secondary:hover, button.secondary:hover { background: var(--surface-muted); }
+    .button.danger, button.danger { background: var(--danger); }
+    input, select, textarea {
+      width: 100%;
+      min-height: 40px;
+      margin-top: 6px;
+      padding: 9px 10px;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background: var(--surface);
+      color: var(--text);
+    }
+    textarea { min-height: 112px; resize: vertical; }
+    input[type="checkbox"] {
+      width: auto;
+      min-height: auto;
+      margin: 0;
+    }
+    input:focus, select:focus, textarea:focus, button:focus, .button:focus {
+      outline: none;
+      box-shadow: var(--focus);
+    }
+    label { display: block; color: var(--text); font-weight: 700; }
+    code, pre { font-family: Consolas, Monaco, monospace; }
+    pre {
+      overflow: auto;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #060806;
+      color: #c9f7d2;
+    }
+    summary.button {
+      list-style: none;
+    }
+    summary.button::-webkit-details-marker {
+      display: none;
+    }
+
+    .app-shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 248px minmax(0, 1fr);
+    }
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow: auto;
+      background:
+        linear-gradient(180deg, rgba(121, 210, 142, 0.11), transparent 34%),
+        repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 10px),
+        var(--surface-strong);
+      color: var(--text);
+      padding: 20px 16px;
+      border-right: 1px solid var(--line);
+    }
+    .brand {
+      position: relative;
+      display: grid;
+      gap: 5px;
+      padding: 0 6px 18px;
+      border-bottom: 1px solid rgba(121, 210, 142, 0.22);
+    }
+    .brand::before {
+      content: "";
+      width: 42px;
+      height: 42px;
+      margin-bottom: 8px;
+      border: 1px solid var(--line-strong);
+      background:
+        linear-gradient(90deg, transparent 47%, rgba(121, 210, 142, 0.75) 48% 52%, transparent 53%),
+        linear-gradient(transparent 47%, rgba(121, 210, 142, 0.75) 48% 52%, transparent 53%),
+        linear-gradient(135deg, rgba(121, 210, 142, 0.16), rgba(176, 111, 60, 0.18));
+      box-shadow: inset 0 0 0 7px rgba(0, 0, 0, 0.28), 0 0 20px rgba(121, 210, 142, 0.22);
+      transform: skew(-5deg);
+    }
+    .brand strong { font-size: 20px; text-transform: uppercase; }
+    .brand span { color: var(--text-muted); font-size: 13px; }
+    .nav-group { margin-top: 18px; }
+    .nav-label {
+      margin: 0 6px 8px;
+      color: var(--steel);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .nav-link {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 38px;
+      padding: 8px 10px;
+      border-radius: var(--radius);
+      color: var(--text);
+      text-decoration: none;
+      border: 1px solid transparent;
+    }
+    .nav-link:hover, .nav-link[aria-current="page"] {
+      background: rgba(121, 210, 142, 0.11);
+      border-color: rgba(121, 210, 142, 0.34);
+      box-shadow: inset 3px 0 0 var(--accent);
+      text-decoration: none;
+    }
+    .nav-count {
+      min-width: 24px;
+      padding: 2px 6px;
+      border-radius: var(--radius);
+      background: rgba(121, 210, 142, 0.16);
+      color: #c9f7d2;
+      font-size: 12px;
+      text-align: center;
+    }
+    .main { min-width: 0; }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      min-height: 64px;
+      padding: 12px 24px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(8, 11, 9, 0.92);
+      backdrop-filter: blur(8px);
+    }
+    .page {
+      max-width: var(--max);
+      margin: 0 auto;
+      padding: 28px 24px 48px;
+    }
+    .page-header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 20px;
+      align-items: start;
+      margin-bottom: 24px;
+    }
+    .eyebrow {
+      margin: 0 0 6px;
+      color: var(--text-muted);
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    h1, h2, h3 { margin: 0; line-height: 1.2; }
+    h1 { color: #f0fff2; font-size: 30px; }
+    h2 { font-size: 22px; }
+    h3 { font-size: 17px; }
+    .summary { margin: 8px 0 0; color: var(--text-muted); max-width: 72ch; }
+    .toolbar, .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+    .toolbar { justify-content: flex-end; }
+    .status-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    .metric {
+      display: block;
+      min-height: 92px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background:
+        linear-gradient(90deg, rgba(121, 210, 142, 0.12), transparent 4px),
+      var(--surface);
+      box-shadow: var(--shadow);
+      color: var(--text);
+      text-decoration: none;
+    }
+    a.metric:hover { border-color: var(--accent); box-shadow: 0 0 20px rgba(121, 210, 142, 0.16); text-decoration: none; }
+    .metric span { display: block; color: var(--text-muted); font-size: 13px; font-weight: 700; }
+    .metric strong { display: block; margin-top: 8px; font-size: 28px; }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 340px;
+      gap: 20px;
+      align-items: start;
+    }
+    .section { margin-bottom: 20px; }
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background:
+        linear-gradient(145deg, rgba(121, 210, 142, 0.08), transparent 38%),
+        var(--surface);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 16px;
+      border-bottom: 1px solid var(--line);
+      background:
+        linear-gradient(90deg, rgba(121, 210, 142, 0.12), transparent 24%),
+        var(--surface-muted);
+    }
+    .panel-body { padding: 16px; }
+    .filters {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr)) auto auto;
+      gap: 12px;
+      align-items: end;
+      margin-bottom: 16px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .form-grid .full { grid-column: 1 / -1; }
+    .check-option {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 4px;
+    }
+    .actions { margin-top: 16px; }
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    table { width: 100%; min-width: 760px; border-collapse: collapse; }
+    th, td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: var(--surface-muted);
+      color: var(--text-muted);
+      font-size: 13px;
+      text-transform: uppercase;
+    }
+    tbody tr:hover { background: rgba(121, 210, 142, 0.055); }
+    tr:last-child td { border-bottom: 0; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 3px 8px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface-muted);
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .badge.queued { background: rgba(210, 168, 75, 0.16); color: #f0c866; border-color: var(--warning); }
+    .badge.review_required { background: rgba(217, 92, 92, 0.15); color: #ff9b9b; border-color: var(--danger); }
+    .badge.done { background: rgba(88, 200, 121, 0.16); color: #9cf0ad; border-color: var(--success); }
+    .badge.disabled { background: rgba(155, 168, 160, 0.12); color: var(--text-muted); }
+    .detail-list {
+      display: grid;
+      grid-template-columns: 180px minmax(0, 1fr);
+      margin: 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      overflow: hidden;
+    }
+    .detail-list dt, .detail-list dd { margin: 0; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+    .detail-list dt { background: var(--surface-muted); color: var(--text-muted); font-weight: 700; }
+    .timeline {
+      display: grid;
+      gap: 12px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .timeline-item {
+      display: grid;
+      grid-template-columns: 150px minmax(0, 1fr);
+      gap: 12px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background:
+        linear-gradient(90deg, rgba(121, 210, 142, 0.08), transparent 4px),
+        var(--surface);
+    }
+    .timeline-time { color: var(--text-muted); font-size: 13px; }
+    .callout {
+      margin-bottom: 20px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--accent);
+      border-radius: var(--radius);
+      background:
+        linear-gradient(90deg, rgba(121, 210, 142, 0.12), transparent 42%),
+        var(--surface);
+    }
+    .callout.warning { border-left-color: var(--warning); }
+    .callout.danger { border-left-color: var(--danger); }
+    .empty {
+      padding: 28px;
+      border: 1px dashed var(--line-strong);
+      border-radius: var(--radius);
+      background: rgba(17, 23, 19, 0.78);
+      color: var(--text-muted);
+      text-align: center;
+    }
+    .inline-form { display: inline; }
+    .muted { color: var(--text-muted); }
+    .workflow-stages {
+      display: grid;
+      gap: 16px;
+      margin: 18px 0 0;
+      padding: 0;
+      list-style: none;
+    }
+    .workflow-stage {
+      display: grid;
+      gap: 12px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(5, 7, 6, 0.36);
+    }
+    .workflow-box-flow {
+      counter-reset: workflow-step;
+    }
+    .workflow-box-flow .workflow-stage {
+      position: relative;
+    }
+    .workflow-box-flow .workflow-stage:not(:last-child)::after {
+      content: "next step";
+      position: absolute;
+      left: 28px;
+      bottom: -24px;
+      z-index: 1;
+      padding: 2px 8px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface-strong);
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .workflow-stage.current {
+      border-color: var(--warning);
+      box-shadow: 0 0 0 1px rgba(210, 168, 75, 0.34), var(--shadow);
+    }
+    .workflow-stage.next {
+      border-color: var(--accent);
+      background:
+        linear-gradient(90deg, rgba(121, 210, 142, 0.12), transparent 5px),
+        rgba(5, 7, 6, 0.36);
+    }
+    .workflow-stage-label {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      min-width: 0;
+    }
+    .workflow-stage-label h3 { flex-basis: 100%; }
+    .workflow-level {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 4px 10px;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background: var(--surface-muted);
+      color: #f0fff2;
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .workflow-nodes {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+    }
+    .workflow-stage.parallel .workflow-nodes {
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      align-items: stretch;
+    }
+    .workflow-node {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background:
+        linear-gradient(90deg, rgba(121, 210, 142, 0.1), transparent 4px),
+        var(--surface);
+    }
+    .workflow-node-header {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .workflow-node-meta {
+      display: grid;
+      grid-template-columns: 72px minmax(0, 1fr);
+      gap: 0;
+      margin: 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .workflow-node-meta dt,
+    .workflow-node-meta dd {
+      margin: 0;
+      padding: 7px 8px;
+      border-bottom: 1px solid var(--line);
+      font-size: 13px;
+    }
+    .workflow-node-meta dt {
+      background: var(--surface-muted);
+      color: var(--text-muted);
+      font-weight: 700;
+    }
+    .workflow-node-meta dd {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      background: rgba(5, 7, 6, 0.28);
+    }
+    .workflow-tasks {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .workflow-tasks li {
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface-muted);
+    }
+    .workflow-tasks p { margin: 6px 0 0; color: var(--text-muted); }
+
+    @media (max-width: 960px) {
+      .app-shell, .layout, .page-header, .status-strip, .filters { grid-template-columns: 1fr; }
+      .sidebar { position: static; height: auto; }
+      .toolbar { justify-content: flex-start; }
+    }
+    @media (max-width: 640px) {
+      .page, .topbar { padding-left: 14px; padding-right: 14px; }
+      .form-grid, .detail-list, .timeline-item { grid-template-columns: 1fr; }
+      table { min-width: 620px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Hauptnavigation">
+      <div class="brand">
+        <strong>Borg Universe</strong>
+        <span>Collective node for tasks, knowledge, and audit</span>
+      </div>
+
+      <nav class="nav-group">
+        <p class="nav-label">Collective</p>
+        <a class="nav-link" href="/" aria-current="{{ 'page' if active == 'home' else 'false' }}"><span>Command Node</span></a>
+        <a class="nav-link" href="/tasks" aria-current="{{ 'page' if active == 'tasks' else 'false' }}">
+          <span>Tasks</span><span class="nav-count">{{ task_count|default(0) }}</span>
+        </a>
+        <a class="nav-link" href="/workflows" aria-current="{{ 'page' if active == 'workflows' else 'false' }}">
+          <span>Workflows</span><span class="nav-count">{{ workflow_count|default(0) }}</span>
+        </a>
+        <a class="nav-link" href="/knowledge" aria-current="{{ 'page' if active == 'knowledge' else 'false' }}"><span>Knowledge</span></a>
+        <a class="nav-link" href="/rules" aria-current="{{ 'page' if active == 'rules' else 'false' }}"><span>Rules</span></a>
+        <a class="nav-link" href="/examples" aria-current="{{ 'page' if active == 'examples' else 'false' }}"><span>Code examples</span></a>
+      </nav>
+
+      <nav class="nav-group">
+        <p class="nav-label">Assimilation</p>
+        <a class="nav-link" href="/agents" aria-current="{{ 'page' if active == 'agents' else 'false' }}">
+          <span>Agents</span><span class="nav-count">{{ agent_count|default(0) }}</span>
+        </a>
+        <a class="nav-link" href="/skills" aria-current="{{ 'page' if active == 'skills' else 'false' }}">
+          <span>Skills</span><span class="nav-count">{{ skill_count|default(0) }}</span>
+        </a>
+        <a class="nav-link" href="/audit" aria-current="{{ 'page' if active == 'audit' else 'false' }}"><span>MCP Audit</span></a>
+      </nav>
+
+      <nav class="nav-group">
+        <p class="nav-label">Orchestration</p>
+        <a class="nav-link" href="/orchestration" aria-current="{{ 'page' if active == 'orchestration' else 'false' }}"><span>Agent selection</span></a>
+        <a class="nav-link" href="/orchestration/local-model" aria-current="{{ 'page' if active == 'local_model' else 'false' }}"><span>Local model</span></a>
+      </nav>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <div>
+          <strong>Local node: non-production</strong>
+          <span class="badge done">{{ system_status|default("configured") }}</span>
+        </div>
+        <div class="toolbar">
+          <a class="button secondary" href="/agents">Manage agents</a>
+          <a class="button secondary" href="/orchestration">Agent selection</a>
+          <a class="button" href="/tasks">Submit task</a>
+        </div>
+      </header>
+
+      <main class="page">
+        <header class="page-header">
+          <div>
+            <p class="eyebrow">{% block eyebrow %}Collective interface{% endblock %}</p>
+            <h1>{% block heading %}{{ heading|default(title|default("Borg Universe")) }}{% endblock %}</h1>
+            <p class="summary">{% block summary %}Controlled task processing with Supabase, MCP, agents, and traceable history in the local node.{% endblock %}</p>
+          </div>
+          <div class="toolbar">{% block page_actions %}{% endblock %}</div>
+        </header>
+
+        {% block notices %}
+        <div class="callout warning">
+          <strong>Node protocol:</strong>
+          Each agent begins with a Supabase project-context lookup via MCP. Empty hits are documented as a question or <code>needs_input</code>.
+        </div>
+        {% endblock %}
+
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </div>
+</body>
+</html>

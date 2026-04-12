@@ -1,0 +1,62 @@
+id: assimilation-demo
+title: Assimilation Demo
+description: Example workflow for an agent with a start node, task handoff, and parallel-running Borg nodes.
+status: queued
+entry_node: queen-architect
+nodes:
+  - id: queen-architect
+    borg_name: Borg Queen Architect
+    role: coordinator
+    agent: borg-queen-architect
+    tasks:
+      - id: intake
+        title: Assimilate target state
+        prompt: Normalize requirements and break the process into controlled phases.
+        status: queued
+  - id: spec-assimilator
+    borg_name: Spec Assimilator
+    role: agent
+    agent: borg-spec-assimilator
+    tasks:
+      - id: spec-review
+        title: Review specification
+        prompt: Convert inputs into testable acceptance criteria.
+        status: draft
+  - id: implementation-drone
+    borg_name: Implementation Drone
+    role: agent
+    agent: borg-implementation-drone
+    subagents:
+      - borg-sub-units
+      - borg-dependency-mapper
+    tasks:
+      - id: implementation-plan
+        title: Prepare implementation
+        prompt: Identify files, dependencies, and risks for the implementation.
+        status: draft
+  - id: cube-testing-node
+    borg_name: Cube Testing Node
+    role: verifier
+    agent: borg-cube-testing-node
+    tasks:
+      - id: verification
+        title: Verify result
+        prompt: Collect tests, artifacts, and open review points.
+        status: draft
+steps:
+  - id: intake
+    title: Initiate start node
+    mode: sequential
+    nodes:
+      - queen-architect
+  - id: parallel-analysis
+    title: Parallelize specification and implementation
+    mode: parallel
+    nodes:
+      - spec-assimilator
+      - implementation-drone
+  - id: verification
+    title: Review result
+    mode: sequential
+    nodes:
+      - cube-testing-node

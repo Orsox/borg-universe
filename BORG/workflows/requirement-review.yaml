@@ -1,0 +1,49 @@
+id: requirement-review-workflow
+title: Requirement Review Workflow
+description: This workflow ensures that after architecture planning by the borg-queen-architect,
+  a requirement review is performed directly by the borg-requirement-node.
+status: queued
+entry_node: queen-architect
+nodes:
+- id: queen-architect
+  borg_name: Queen
+  role: Architect
+  agent: borg-queen-architect
+  subagents: []
+  tasks:
+  - id: architecture-planning
+    title: Initialize architecture and requirements
+    prompt: ''
+    status: queued
+    depends_on: []
+  prompt: ''
+- id: requirement-node
+  borg_name: Borg Requirement Node
+  role: verifier
+  agent: borg-requirement-node
+  subagents: []
+  tasks:
+  - id: spec-review
+    title: Review borg-cube.md
+    prompt: Check the generated borg-cube.md for quality, consistency, and the testability
+      of the requirements.
+    status: draft
+    depends_on:
+    - queen-architect
+steps:
+- id: planning-phase
+  title: Architecture and requirements phase
+  mode: sequential
+  nodes:
+  - queen-architect
+- id: review-phase
+  title: Review phase
+  mode: sequential
+  nodes:
+  - requirement-node
+  retry:
+    condition: nodes['requirement-node'].output.retry_required == true
+    max_attempts: 3
+    target_node: queen-architect
+    message: 'Requirement issues found. Please correct the borg-cube.md based on the
+      following review: {{nodes[''requirement-node''].output.errors}}'

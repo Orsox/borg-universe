@@ -1,0 +1,68 @@
+{% extends "ui_template.html" %}
+
+{% block title %}{{ heading }} - Borg Universe{% endblock %}
+{% block eyebrow %}Knowledge base{% endblock %}
+{% block heading %}{{ heading }}{% endblock %}
+{% block summary %}Filter entries, create new ones, edit them, and remove them. Agents will query this data through MCP later.{% endblock %}
+
+{% block content %}
+<form class="filters" method="get" action="{{ list_path }}">
+  {% for field in filter_fields %}
+  <label>{{ field|pretty }}
+    <input name="{{ field }}" value="{{ filters.get(field, '') }}">
+  </label>
+  {% endfor %}
+  <button type="submit">Filter</button>
+  <a class="button secondary" href="{{ list_path }}">Clear</a>
+</form>
+
+<section class="section panel">
+  <div class="panel-header"><h2>New entry</h2></div>
+  <div class="panel-body">
+    <form method="post" action="{{ list_path }}">
+      <div class="form-grid">
+        {% for field in form_fields %}
+        <label class="{{ 'full' if field.type == 'textarea' else '' }}">{{ field.label }}
+          {% if field.type == "textarea" %}
+          <textarea name="{{ field.name }}" rows="{{ field.rows|default(4) }}" {% if field.required %}required{% endif %}></textarea>
+          {% else %}
+          <input name="{{ field.name }}" {% if field.required %}required{% endif %} value="{{ field.default|default('') }}">
+          {% endif %}
+        </label>
+        {% endfor %}
+      </div>
+      <div class="actions"><button type="submit">Save</button></div>
+    </form>
+  </div>
+</section>
+
+<section class="section">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          {% for column in columns %}<th>{{ column|pretty }}</th>{% endfor %}
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in items %}
+        <tr>
+          {% for column in columns %}
+          <td>{{ item.get(column)|csv }}</td>
+          {% endfor %}
+          <td>
+            <a class="button secondary" href="{{ list_path }}/{{ item.id }}/edit">Edit</a>
+            <form class="inline-form" method="post" action="{{ list_path }}/{{ item.id }}/delete">
+              <button type="submit" class="danger">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="{{ columns|length + 1 }}">{% include "partials/empty.html" with context %}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,161 @@
+{% extends "ui_template.html" %}
+
+{% block title %}Review {{ task.title }} - Borg Universe{% endblock %}
+{% block eyebrow %}Review{% endblock %}
+{% block heading %}{{ task.title }}{% endblock %}
+{% block summary %}Review, modify, or confirm the task so the workflow chain can continue.{% endblock %}
+{% block page_actions %}
+<a class="button secondary" href="/tasks/{{ task.id }}">Back to task</a>
+{% endblock %}
+
+{% block content %}
+<section class="layout">
+  <div>
+    <section class="section panel">
+      <div class="panel-header">
+        <h2>Review task</h2>
+        <span class="badge {{ task.status|badge_class }}">{{ task.status }}</span>
+      </div>
+      <div class="panel-body">
+        <div class="callout">
+          <strong>LLM summary for review</strong>
+          {% if llm_review %}
+          <p class="muted">{{ llm_review.created_at }} · {{ llm_review.source }}</p>
+          <textarea readonly rows="6">{{ llm_review.summary }}</textarea>
+          {% else %}
+          <p>No LLM summary is available yet for this task.</p>
+          {% endif %}
+        </div>
+        <div class="callout">
+          <strong>LLM transcript</strong>
+          {% if llm_transcript %}
+          {% for entry in llm_transcript %}
+          <p class="muted">Iteration {{ entry.iteration }}</p>
+          <label>Prompt
+            <textarea readonly rows="6">{{ entry.prompt or "" }}</textarea>
+          </label>
+          <label>Response
+            <textarea readonly rows="8">{{ entry.response or "" }}</textarea>
+          </label>
+          {% if entry.parsed %}
+          <label>Parsed
+            <textarea readonly rows="4">{{ entry.parsed }}</textarea>
+          </label>
+          {% endif %}
+          {% endfor %}
+          {% else %}
+          <p>No LLM transcript is available yet for this task.</p>
+          {% endif %}
+        </div>
+        <div class="callout">
+          <strong>LLM output for review</strong>
+          {% if llm_human_output %}
+          <textarea readonly rows="12">{{ llm_human_output }}</textarea>
+          {% else %}
+          <p>No combined LLM output is available yet for this task.</p>
+          {% endif %}
+        </div>
+        <form method="post" action="/tasks/{{ task.id }}/review">
+          <div class="form-grid">
+            <label>Action
+              <select name="review_action">
+                {% for action in review_actions %}
+                <option value="{{ action.value }}">{{ action.label }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>Title
+              <input name="title" value="{{ task.title or '' }}">
+            </label>
+            <label class="full">Description
+              <textarea name="description" rows="4">{{ task.description or '' }}</textarea>
+            </label>
+            <label>Platform <input name="target_platform" value="{{ task.target_platform or '' }}"></label>
+            <label>MCU <input name="target_mcu" value="{{ task.target_mcu or '' }}"></label>
+            <label>Board <input name="board" value="{{ task.board or '' }}"></label>
+            <label class="full">Local path <input name="local_path" value="{{ task.local_path or '' }}"></label>
+            <label>Requested by <input name="requested_by" value="{{ task.requested_by or '' }}"></label>
+            <label class="check-option full">
+              <input type="hidden" name="pycharm_mcp_enabled" value="false">
+              <input type="checkbox" name="pycharm_mcp_enabled" {% if task.pycharm_mcp_enabled %}checked{% endif %}>
+              <span>PyCharm MCP</span>
+            </label>
+            <label class="full">Review notes
+              <textarea name="review_notes" rows="4" placeholder="Document the review result, requested changes, or approval notes"></textarea>
+            </label>
+          </div>
+          <div class="actions">
+            <button type="submit">Save review</button>
+            <button type="submit" name="action" value="confirm">Confirm and continue</button>
+            <button type="submit" class="secondary" name="action" value="request_changes">Request changes</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section class="section panel">
+      <div class="panel-header"><h2>History</h2></div>
+      <div class="panel-body">
+        <ol class="timeline">
+          {% for event in events|reverse %}
+          <li class="timeline-item">
+            <time class="timeline-time">{{ event.created_at }}</time>
+            <div>
+              <h3>{{ event.event_type }}</h3>
+              <p>{{ event.message }}</p>
+              {% if event.payload %}<pre>{{ event.payload }}</pre>{% endif %}
+            </div>
+          </li>
+          {% else %}
+          <li>{% include "partials/empty.html" with context %}</li>
+          {% endfor %}
+        </ol>
+      </div>
+    </section>
+  </div>
+
+  <aside>
+    <section class="section panel">
+      <div class="panel-header"><h2>Current task</h2></div>
+      <div class="panel-body">
+        <dl class="detail-list">
+          {% for label, key in detail_fields %}
+          <dt>{{ label }}</dt>
+          <dd>
+            {% if key == "project_id" and task.get(key) %}
+              <span class="badge done">{{ project_labels.get(task.get(key), task.get(key)) }}</span>
+            {% elif key == "workflow_id" and task.get(key) %}
+              <span class="badge queued">{{ workflow_labels.get(task.get(key), task.get(key)) }}</span>
+            {% elif key == "pycharm_mcp_enabled" %}
+              <span class="badge {{ 'done' if task.get(key) else 'queued' }}">{{ "yes" if task.get(key) else "no" }}</span>
+            {% else %}
+              {{ task.get(key) or "" }}
+            {% endif %}
+          </dd>
+          {% endfor %}
+        </dl>
+      </div>
+    </section>
+
+    <section class="section panel">
+      <div class="panel-header"><h2>Artifacts</h2></div>
+      <div class="panel-body">
+        <ol class="timeline">
+          {% for artifact in artifacts %}
+          <li class="timeline-item">
+            <time class="timeline-time">{{ artifact.created_at }}</time>
+            <div>
+              <h3>{{ artifact.artifact_type }}</h3>
+              <p>{{ artifact.path_or_storage_key }}</p>
+              {% if artifact.checksum %}<p class="muted">{{ artifact.checksum }}</p>{% endif %}
+            </div>
+          </li>
+          {% else %}
+          <li>{% include "partials/empty.html" with context %}</li>
+          {% endfor %}
+        </ol>
+      </div>
+    </section>
+  </aside>
+</section>
+{% endblock %}

@@ -1,0 +1,6 @@
+2026-04-12 06:28:47,116 DEBUG [asyncio] Using proactor: IocpProactor
+2026-04-12 06:28:47,120 INFO [httpx] HTTP Request: POST http://testserver/orchestration/local-model "HTTP/1.1 422 Unprocessable Entity"
+2026-04-12 06:31:37,589 DEBUG [asyncio] Using proactor: IocpProactor
+2026-04-12 06:31:37,593 INFO [httpx] HTTP Request: POST http://testserver/orchestration/local-model "HTTP/1.1 422 Unprocessable Entity"
+2026-04-12 06:32:56,615 DEBUG [asyncio] Using proactor: IocpProactor
+2026-04-12 06:32:56,618 INFO [httpx] HTTP Request: POST http://testserver/orchestration/local-model "HTTP/1.1 422 Unprocessable Entity"

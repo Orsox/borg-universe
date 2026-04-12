@@ -1,0 +1,65 @@
+2026-04-12 07:04:41,363 INFO Writing smoke test log to D:\Workbench\borg-universe\tests\artifacts\test-logs\local_llm_smoke.log
+2026-04-12 07:04:41,366 INFO Local LLM smoke test started
+2026-04-12 07:04:41,366 INFO Loaded config file: D:\Workbench\borg-universe\BORG\config\orchestration.json
+2026-04-12 07:04:41,366 INFO Resolved endpoint: http://127.0.0.1:12345
+2026-04-12 07:04:41,366 INFO Resolved model: borg-cpu
+2026-04-12 07:04:41,366 INFO Input prompt: Antworte mir mit einem einfachen Hallo
+2026-04-12 07:04:48,716 INFO Models response: {"object": "list", "data": [{"id": "borg-cpu", "object": "model", "created": 0, "owned_by": "llm-router"}, {"id": "qwen/qwen3.5-9b", "object": "model", "created": 0, "owned_by": "llm-router-small"}, {"id": "qwen3-coder-next-ream", "object": "model", "created": 0, "owned_by": "llm-router-large"}, {"id": "gpt-5.4-mini", "object": "model", "created": 0, "owned_by": "llm-router-deep"}, {"id": "gpt-4o-mini", "object": "model", "created": 0, "owned_by": "llm-router-backup"}]}
+2026-04-12 07:04:48,716 INFO Chat request: {"model": "borg-cpu", "messages": [{"role": "user", "content": "Antworte mir mit einem einfachen Hallo"}], "stream": false}
+2026-04-12 07:04:48,716 INFO Chat reply: 
+
+Hallo!
+2026-04-12 07:04:48,716 INFO Endpoint: http://127.0.0.1:12345
+2026-04-12 07:04:48,716 INFO Available models:
+2026-04-12 07:04:48,716 INFO {
+  "object": "list",
+  "data": [
+    {
+      "id": "borg-cpu",
+      "object": "model",
+      "created": 0,
+      "owned_by": "llm-router"
+    },
+    {
+      "id": "qwen/qwen3.5-9b",
+      "object": "model",
+      "created": 0,
+      "owned_by": "llm-router-small"
+    },
+    {
+      "id": "qwen3-coder-next-ream",
+      "object": "model",
+      "created": 0,
+      "owned_by": "llm-router-large"
+    },
+    {
+      "id": "gpt-5.4-mini",
+      "object": "model",
+      "created": 0,
+      "owned_by": "llm-router-deep"
+    },
+    {
+      "id": "gpt-4o-mini",
+      "object": "model",
+      "created": 0,
+      "owned_by": "llm-router-backup"
+    }
+  ]
+}
+2026-04-12 07:04:48,716 INFO Prompt:
+2026-04-12 07:04:48,716 INFO Antworte mir mit einem einfachen Hallo
+2026-04-12 07:04:48,716 INFO Reply:
+2026-04-12 07:04:48,716 INFO 
+
+Hallo!
+2026-04-12 07:04:48,716 INFO Chat request:
+2026-04-12 07:04:48,716 INFO {
+  "model": "borg-cpu",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Antworte mir mit einem einfachen Hallo"
+    }
+  ],
+  "stream": false
+}

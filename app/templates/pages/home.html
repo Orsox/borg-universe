@@ -1,0 +1,226 @@
+{% extends "ui_template.html" %}
+
+{% block title %}Borg Universe{% endblock %}
+{% block eyebrow %}Collective interface{% endblock %}
+{% block heading %}Borg Universe Command Node{% endblock %}
+{% block summary %}Local control node for tasks, knowledge, agents, skills, and auditable MCP access.{% endblock %}
+{% block page_actions %}
+<a class="button secondary" href="/projects/new">New project</a>
+<a class="button" href="/workflows">View workflows</a>
+<a class="button" href="/tasks">Submit task</a>
+<a class="button secondary" href="/agents">Manage agents</a>
+{% endblock %}
+
+{% block notices %}
+<div class="callout">
+  <strong>Collective status:</strong>
+  The local node is running in non-production mode. Supabase context, MCP logging, and agent coordination remain traceable.
+</div>
+{% endblock %}
+
+{% block content %}
+<section class="status-strip">
+  <div class="metric">
+    <span>Supabase link</span>
+    <strong>{{ "active" if supabase_configured else "open" }}</strong>
+  </div>
+  <div class="metric">
+    <span>MCP mode</span>
+    <strong>{{ "ready" if mcp_configured else "local" }}</strong>
+  </div>
+  <div class="metric">
+    <span>Agents path</span>
+    <strong>{{ agents_root_name }}</strong>
+  </div>
+  <div class="metric">
+    <span>Skills path</span>
+    <strong>{{ skills_root_name }}</strong>
+  </div>
+</section>
+
+<section class="layout">
+  <div>
+    <section class="section panel">
+      <div class="panel-header">
+        <h2>Task telemetry</h2>
+        <span class="badge done">live</span>
+      </div>
+      <div class="panel-body">
+        {% if task_error %}
+        <div class="callout warning">
+          <strong>Task storage unavailable:</strong>
+          {{ task_error }}
+        </div>
+        {% endif %}
+        <dl class="detail-list">
+          <dt>Processed</dt><dd>{{ processed_task_count }}</dd>
+          <dt>Active</dt><dd>{{ active_task_count }}</dd>
+        </dl>
+      </div>
+    </section>
+
+    <section class="section panel">
+      <div class="panel-header">
+        <h2>Review required</h2>
+        <span class="badge review_required">{{ review_required_count }}</span>
+      </div>
+      <div class="panel-body">
+        {% if review_tasks %}
+        <ol class="timeline">
+          {% for task in review_tasks %}
+          <li class="timeline-item">
+            <time class="timeline-time">{{ task.updated_at or task.created_at or "" }}</time>
+            <div>
+              <h3><a href="/tasks/{{ task.id }}/review">{{ task.title }}</a></h3>
+              <p>{{ task.description }}</p>
+              <p class="muted">{{ task.local_path or "" }}</p>
+            </div>
+          </li>
+          {% endfor %}
+        </ol>
+        {% else %}
+        <div class="empty">
+          <strong>No tasks pending review</strong>
+          <p>Tasks marked as review required appear here and can be continued from the review page.</p>
+        </div>
+        {% endif %}
+      </div>
+    </section>
+
+    <section class="section panel">
+      <div class="panel-header">
+        <h2>Operations matrix</h2>
+        <span class="badge done">node online</span>
+      </div>
+      <div class="panel-body">
+        <div class="status-strip">
+          <a class="metric" href="/tasks">
+            <span>Tasks</span>
+            <strong>Queue</strong>
+          </a>
+          <a class="metric" href="/workflows">
+            <span>Workflows</span>
+            <strong>YAML</strong>
+          </a>
+          <a class="metric" href="/knowledge">
+            <span>Knowledge</span>
+            <strong>Index</strong>
+          </a>
+          <a class="metric" href="/agents">
+            <span>Agents</span>
+            <strong>Registry</strong>
+          </a>
+          <a class="metric" href="/audit">
+            <span>MCP</span>
+            <strong>Audit</strong>
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <section class="section panel">
+      <div class="panel-header">
+        <h2>Projects</h2>
+        <span class="badge">{{ project_count }}</span>
+      </div>
+      <div class="panel-body">
+        {% if projects %}
+        <dl class="detail-list">
+          {% for project in projects %}
+          <dt>{{ project.name }}</dt>
+          <dd>
+            <span class="badge">{{ project.project_type|default("stm")|pretty }}</span>
+            {% if project.pycharm_mcp_enabled %}<span class="badge done">PyCharm MCP</span>{% endif %}
+            {{ project.description }}
+            {% if project.project_directory %}
+            <br><code>{{ project.project_directory }}</code>
+            {% endif %}
+            {% if project.pycharm_mcp_sse_url or project.pycharm_mcp_stream_url %}
+            <br><small>MCP SSE: <code>{{ project.pycharm_mcp_sse_url or "" }}</code></small>
+            <br><small>MCP stream: <code>{{ project.pycharm_mcp_stream_url or "" }}</code></small>
+            {% endif %}
+            {% if project.default_platform or project.default_mcu or project.default_board or project.default_topic %}
+            <br><small>{{ project.default_platform or "" }} {{ project.default_mcu or "" }} {{ project.default_board or "" }} {{ project.default_topic or "" }}</small>
+            {% endif %}
+          </dd>
+          {% endfor %}
+        </dl>
+        {% else %}
+        <div class="empty">
+          <strong>No projects available</strong>
+          <p>Create an STM, Nordic, or Python project to use it in task selection.</p>
+        </div>
+        {% endif %}
+      </div>
+    </section>
+
+    <section class="section panel">
+      <div class="panel-header">
+        <h2>Node protocol</h2>
+        <span class="badge queued">mandatory lookup</span>
+      </div>
+      <div class="panel-body">
+        <ol class="timeline">
+          <li class="timeline-item">
+            <time class="timeline-time">01</time>
+            <div>
+              <h3>Submit task</h3>
+              <p>Tasks are captured with target platform, context, and project-selected execution defaults.</p>
+            </div>
+          </li>
+          <li class="timeline-item">
+            <time class="timeline-time">02</time>
+            <div>
+              <h3>Fetch project context</h3>
+              <p>Each agent run begins with a Supabase project-context lookup through MCP.</p>
+            </div>
+          </li>
+          <li class="timeline-item">
+            <time class="timeline-time">03</time>
+            <div>
+              <h3>Audit results</h3>
+              <p>History, questions, and artifacts remain traceable in the local node.</p>
+            </div>
+          </li>
+        </ol>
+      </div>
+    </section>
+  </div>
+
+  <aside>
+    <section class="section panel">
+      <div class="panel-header">
+        <h2>Quick access</h2>
+      </div>
+      <div class="panel-body">
+        <dl class="detail-list">
+          <dt>Tasks</dt><dd><a href="/tasks">Queue and worker history</a></dd>
+          <dt>Workflows</dt><dd><a href="/workflows">YAML flow and node boxes</a></dd>
+          <dt>Knowledge</dt><dd><a href="/knowledge">Manage project knowledge</a></dd>
+          <dt>Rules</dt><dd><a href="/rules">Maintain review rules</a></dd>
+          <dt>Skills</dt><dd><a href="/skills">Scan local skills</a></dd>
+          <dt>Audit</dt><dd><a href="/audit">Review MCP access</a></dd>
+          <dt>Agent selection</dt><dd><a href="/orchestration">Choose system or agent</a></dd>
+          <dt>Local model</dt><dd><a href="/orchestration/local-model">Configure host and key</a></dd>
+        </dl>
+      </div>
+    </section>
+
+    <section class="section panel">
+      <div class="panel-header">
+        <h2>Configuration</h2>
+      </div>
+      <div class="panel-body">
+        <dl class="detail-list">
+          <dt>Environment</dt><dd>{{ environment }}</dd>
+          <dt>Version</dt><dd>{{ app_version }}</dd>
+          <dt>Supabase</dt><dd><span class="badge {{ 'done' if supabase_configured else 'review_required' }}">{{ "configured" if supabase_configured else "missing" }}</span></dd>
+          <dt>MCP</dt><dd><span class="badge {{ 'done' if mcp_configured else 'queued' }}">{{ "configured" if mcp_configured else "local" }}</span></dd>
+          <dt>Agent system</dt><dd>{{ agent_system }}</dd>
+          <dt>Local model</dt><dd>{{ local_model_endpoint }}</dd>
+        </dl>
+      </div>
+    </section>
+  </aside>
+</section>
+{% endblock %}

@@ -1,0 +1,60 @@
+{% extends "ui_template.html" %}
+
+{% block title %}New project - Borg Universe{% endblock %}
+{% block eyebrow %}Projects{% endblock %}
+{% block heading %}New project{% endblock %}
+{% block summary %}Create a project with directory, defaults, and PyCharm MCP metadata from a dedicated page.{% endblock %}
+{% block page_actions %}
+<a class="button secondary" href="/">Back</a>
+{% endblock %}
+
+{% block content %}
+<section class="section panel">
+  <div class="panel-header">
+    <h2>Project setup</h2>
+    <span class="badge queued">Dedicated page</span>
+  </div>
+  <div class="panel-body">
+    <form method="post" action="/projects">
+      <div class="form-grid">
+        <label>Name
+          <input name="name" required maxlength="160" placeholder="Project name">
+        </label>
+        <label>Project ID
+          <input name="id" maxlength="80" placeholder="Auto-generated if empty">
+        </label>
+        <label class="full">Project type
+          <select name="project_type" required>
+            {% for project_type in project_types %}
+            <option value="{{ project_type.value }}">{{ project_type.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="full">Description
+          <textarea name="description" rows="4" placeholder="Project facts, target, repository, board, or runtime context"></textarea>
+        </label>
+        <label class="full">Project directory
+          <input name="project_directory" maxlength="500" placeholder="D:\Workbench\firststart">
+        </label>
+        <label class="check-option full">
+          <input type="checkbox" name="pycharm_mcp_enabled">
+          <span>PyCharm MCP</span>
+        </label>
+        <label class="full">PyCharm MCP SSE URL
+          <input name="pycharm_mcp_sse_url" maxlength="500" placeholder="http://127.0.0.1:64769/sse">
+        </label>
+        <label class="full">PyCharm MCP stream URL
+          <input name="pycharm_mcp_stream_url" maxlength="500" placeholder="http://127.0.0.1:64769/stream">
+        </label>
+        <label>Platform default <input name="default_platform" maxlength="120"></label>
+        <label>MCU default <input name="default_mcu" maxlength="120"></label>
+        <label>Board default <input name="default_board" maxlength="120"></label>
+        <label>Topic default <input name="default_topic" maxlength="120"></label>
+      </div>
+      <div class="actions">
+        <button type="submit">Create project</button>
+      </div>
+    </form>
+  </div>
+</section>
+{% endblock %}

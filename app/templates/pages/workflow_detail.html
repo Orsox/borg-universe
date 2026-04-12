@@ -1,0 +1,124 @@
+{% extends "ui_template.html" %}
+
+{% block title %}{{ workflow.title }} - Borg Universe{% endblock %}
+{% block eyebrow %}Workflows{% endblock %}
+{% block heading %}{{ workflow.title }}{% endblock %}
+{% block summary %}{{ workflow.description }}{% endblock %}
+{% block page_actions %}
+<a class="button secondary" href="/workflows">Back to workflows</a>
+<a class="button secondary" href="/workflows/settings">Manage files</a>
+<a class="button" href="#workflow-yaml">Show YAML source</a>
+{% endblock %}
+
+{% block notices %}
+<div class="callout">
+  <strong>Workflow source:</strong>
+  <code>{{ workflow_file }}</code>
+</div>
+{% if message %}
+<div class="callout danger">
+  <strong>YAML not saved:</strong>
+  {{ message }}
+</div>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+{% include "partials/status_strip.html" %}
+
+<section class="section panel">
+  <div class="panel-header">
+    <div>
+      <h2>Workflow overview</h2>
+      <p class="summary">{{ workflow.description }}</p>
+    </div>
+    <span class="badge {{ workflow.status|badge_class }}">{{ workflow.status }}</span>
+  </div>
+  <div class="panel-body">
+    <dl class="detail-list">
+      <dt>Workflow</dt><dd>{{ workflow.id }}</dd>
+      <dt>Start node</dt><dd>{{ workflow.entry_node }}</dd>
+      <dt>Source</dt><dd>{{ workflow.source_file or workflow_file }}</dd>
+      <dt>Nodes</dt><dd>{{ workflow.nodes|length }}</dd>
+      <dt>Steps</dt><dd>{{ workflow.steps|length }}</dd>
+    </dl>
+  </div>
+</section>
+
+<section class="section panel">
+  <div class="panel-header">
+    <h2>Execution view</h2>
+    <span class="badge done">current</span>
+  </div>
+  <div class="panel-body">
+    <ol class="workflow-stages workflow-box-flow">
+      {% for stage in workflow_stages %}
+      {% set stage_index = loop.index0 %}
+      <li class="workflow-stage {{ 'parallel' if stage.mode == 'parallel' else 'sequential' }} {{ 'current' if workflow_progress.active == stage_index else '' }} {{ 'next' if workflow_progress.next == stage_index else '' }}">
+        <div class="workflow-stage-label">
+          <span class="workflow-level">Level {{ loop.index }}</span>
+          <span class="badge {{ 'queued' if stage.mode == 'parallel' else 'done' }}">{{ stage.mode }}</span>
+          {% if workflow_progress.active == stage_index %}<span class="badge queued">current</span>{% endif %}
+          {% if workflow_progress.next == stage_index %}<span class="badge">next step</span>{% endif %}
+          <h3>{{ stage.title }}</h3>
+        </div>
+        <div class="workflow-nodes">
+          {% for node in stage.nodes %}
+          <article class="workflow-node">
+            <div class="workflow-node-header">
+              <h3>{{ node.borg_name }}</h3>
+              <span class="badge">{{ node.role }}</span>
+            </div>
+            <dl class="workflow-node-meta">
+              <dt>Node</dt><dd>{{ node.id }}</dd>
+              <dt>Agent</dt><dd>{{ node.agent or node.id }}</dd>
+            </dl>
+            {% if node.subagents %}
+            <p><strong>Subagents:</strong> {{ node.subagents|csv }}</p>
+            {% endif %}
+            <ul class="workflow-tasks">
+              {% for task in node.tasks %}
+              <li>
+                <span class="badge {{ task.status|badge_class }}">{{ task.status }}</span>
+                <strong>{{ task.title }}</strong>
+                {% if task.prompt %}<p>{{ task.prompt }}</p>{% endif %}
+              </li>
+              {% else %}
+              <li class="muted">No tasks assigned.</li>
+              {% endfor %}
+            </ul>
+          </article>
+          {% endfor %}
+        </div>
+      </li>
+      {% endfor %}
+    </ol>
+  </div>
+</section>
+
+<section class="section panel" id="workflow-yaml">
+  <div class="panel-header">
+    <h2>YAML source</h2>
+    <span class="badge queued">editable</span>
+  </div>
+  <div class="panel-body">
+    <details>
+      <summary class="button secondary">Show YAML source</summary>
+      <form method="post" action="/workflows/{{ workflow.id }}">
+        <div class="form-grid" style="margin-top: 16px;">
+          <label class="full">Filename
+            <input name="filename" value="{{ workflow_file }}" required pattern="[^\\/]+\.ya?ml" title="Use a local .yaml or .yml filename without path separators.">
+          </label>
+          <label class="full">Workflow YAML
+            <textarea name="yaml_content" rows="30" spellcheck="false" required>{{ workflow_yaml }}</textarea>
+          </label>
+        </div>
+        <div class="actions">
+          <button type="submit">Save workflow</button>
+          <a class="button secondary" href="/workflows/{{ workflow.id }}">Reset</a>
+        </div>
+      </form>
+    </details>
+  </div>
+</section>
+{% endblock %}

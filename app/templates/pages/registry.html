@@ -1,0 +1,48 @@
+{% extends "ui_template.html" %}
+
+{% block title %}{{ heading }} - Borg Universe{% endblock %}
+{% block eyebrow %}Borg Registry{% endblock %}
+{% block heading %}{{ heading }}{% endblock %}
+{% block summary %}Scan local agents and skills, enable or disable them, and review their Supabase access requirements.{% endblock %}
+{% block page_actions %}
+<form class="inline-form" method="post" action="/{{ kind }}/sync"><button type="submit">Scan locally</button></form>
+{% endblock %}
+
+{% block content %}
+<section class="section">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Status</th>
+          <th>Supabase lookup</th>
+          <th>Scopes</th>
+          <th>Description</th>
+          <th>Path</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in items %}
+        <tr>
+          <td>{{ item.name }}</td>
+          <td><span class="badge {{ item.enabled|badge_class }}">{{ "enabled" if item.enabled else "disabled" }}</span></td>
+          <td><span class="badge {{ item.requires_supabase_project_lookup|badge_class }}">{{ "required" if item.requires_supabase_project_lookup else "off" }}</span></td>
+          <td>{{ item.allowed_supabase_scopes|csv }}</td>
+          <td>{{ item.description }}</td>
+          <td>{{ item.path }}</td>
+          <td>
+            <form class="inline-form" method="post" action="/{{ kind }}/{{ item.name }}/toggle">
+              <button type="submit" class="secondary">{{ "Disable" if item.enabled else "Enable" }}</button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7">{% include "partials/empty.html" with context %}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

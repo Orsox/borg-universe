@@ -1,0 +1,60 @@
+{% extends "ui_template.html" %}
+
+{% block title %}Agent Selection - Borg Universe{% endblock %}
+{% block eyebrow %}Orchestration{% endblock %}
+{% block heading %}Agent selection{% endblock %}
+{% block summary %}Choose the agent system for local work and keep the default execution target visible for operators.{% endblock %}
+{% block page_actions %}
+<a class="button secondary" href="/orchestration/local-model">Local model config</a>
+{% endblock %}
+
+{% block content %}
+{% include "partials/status_strip.html" %}
+
+<section class="section panel">
+  <div class="panel-header">
+    <h2>Execution target</h2>
+    <span class="badge queued">{{ settings.agent_selection.agent_system|pretty }}</span>
+  </div>
+  <div class="panel-body">
+    <form method="post" action="/orchestration">
+      <div class="form-grid">
+        <label class="full">Agent system
+          <select name="agent_system">
+            {% for system in agent_systems %}
+            <option value="{{ system }}" {% if settings.agent_selection.agent_system == system %}selected{% endif %}>{{ system|pretty }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="full">Agent name
+          <input name="agent_name" value="{{ settings.agent_selection.agent_name or '' }}" maxlength="120" placeholder="Optional custom agent">
+        </label>
+        <label class="full">Notes
+          <textarea name="notes" rows="4" placeholder="Optional operator note">{{ settings.agent_selection.notes or '' }}</textarea>
+        </label>
+        <label>Parallel queued tasks
+          <input name="max_parallel_tasks" type="number" min="1" max="32" value="{{ settings.execution.max_parallel_tasks }}">
+        </label>
+      </div>
+      <div class="actions">
+        <button type="submit">Save selection</button>
+      </div>
+    </form>
+  </div>
+</section>
+
+<section class="section panel">
+  <div class="panel-header">
+    <h2>Current routing</h2>
+  </div>
+  <div class="panel-body">
+    <dl class="detail-list">
+      <dt>System</dt><dd>{{ settings.agent_selection.agent_system|pretty }}</dd>
+      <dt>Agent</dt><dd>{{ settings.agent_selection.agent_name or "Not set" }}</dd>
+      <dt>Parallel tasks</dt><dd>{{ settings.execution.max_parallel_tasks }}</dd>
+      <dt>Notes</dt><dd>{{ settings.agent_selection.notes or "None" }}</dd>
+      <dt>Updated</dt><dd>{{ settings.updated_at or "Never" }}</dd>
+    </dl>
+  </div>
+</section>
+{% endblock %}

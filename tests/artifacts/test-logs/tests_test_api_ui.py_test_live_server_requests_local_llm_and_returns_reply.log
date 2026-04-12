@@ -1,0 +1,31 @@
+2026-04-12 06:28:46,167 DEBUG [asyncio] Using proactor: IocpProactor
+2026-04-12 06:28:46,348 DEBUG [httpcore.connection] connect_tcp.started host='127.0.0.1' port=62386 local_address=None timeout=0.5 socket_options=None
+2026-04-12 06:28:46,348 DEBUG [httpcore.connection] connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x0000016BD34F9BE0>
+2026-04-12 06:28:46,349 DEBUG [httpcore.http11] send_request_headers.started request=<Request [b'GET']>
+2026-04-12 06:28:46,349 DEBUG [httpcore.http11] send_request_headers.complete
+2026-04-12 06:28:46,349 DEBUG [httpcore.http11] send_request_body.started request=<Request [b'GET']>
+2026-04-12 06:28:46,349 DEBUG [httpcore.http11] send_request_body.complete
+2026-04-12 06:28:46,349 DEBUG [httpcore.http11] receive_response_headers.started request=<Request [b'GET']>
+2026-04-12 06:28:46,350 DEBUG [httpcore.http11] receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Sun, 12 Apr 2026 04:28:46 GMT'), (b'server', b'uvicorn'), (b'content-length', b'156'), (b'content-type', b'application/json')])
+2026-04-12 06:28:46,350 INFO [httpx] HTTP Request: GET http://127.0.0.1:62386/health "HTTP/1.1 200 OK"
+2026-04-12 06:28:46,350 DEBUG [httpcore.http11] receive_response_body.started request=<Request [b'GET']>
+2026-04-12 06:28:46,350 DEBUG [httpcore.http11] receive_response_body.complete
+2026-04-12 06:28:46,350 DEBUG [httpcore.http11] response_closed.started
+2026-04-12 06:28:46,350 DEBUG [httpcore.http11] response_closed.complete
+2026-04-12 06:28:46,350 DEBUG [httpcore.connection] close.started
+2026-04-12 06:28:46,350 DEBUG [httpcore.connection] close.complete
+2026-04-12 06:28:46,482 DEBUG [httpcore.connection] connect_tcp.started host='127.0.0.1' port=62386 local_address=None timeout=5.0 socket_options=None
+2026-04-12 06:28:46,482 DEBUG [httpcore.connection] connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x0000016BD355CB90>
+2026-04-12 06:28:46,483 DEBUG [httpcore.http11] send_request_headers.started request=<Request [b'POST']>
+2026-04-12 06:28:46,483 DEBUG [httpcore.http11] send_request_headers.complete
+2026-04-12 06:28:46,483 DEBUG [httpcore.http11] send_request_body.started request=<Request [b'POST']>
+2026-04-12 06:28:46,483 DEBUG [httpcore.http11] send_request_body.complete
+2026-04-12 06:28:46,484 DEBUG [httpcore.http11] receive_response_headers.started request=<Request [b'POST']>
+2026-04-12 06:28:46,623 DEBUG [httpcore.http11] receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Sun, 12 Apr 2026 04:28:46 GMT'), (b'server', b'uvicorn'), (b'content-length', b'221'), (b'content-type', b'application/json')])
+2026-04-12 06:28:46,623 INFO [httpx] HTTP Request: POST http://127.0.0.1:62386/api/orchestration/local-model/test "HTTP/1.1 200 OK"
+2026-04-12 06:28:46,623 DEBUG [httpcore.http11] receive_response_body.started request=<Request [b'POST']>
+2026-04-12 06:28:46,623 DEBUG [httpcore.http11] receive_response_body.complete
+2026-04-12 06:28:46,623 DEBUG [httpcore.http11] response_closed.started
+2026-04-12 06:28:46,623 DEBUG [httpcore.http11] response_closed.complete
+2026-04-12 06:28:46,623 DEBUG [httpcore.connection] close.started
+2026-04-12 06:28:46,623 DEBUG [httpcore.connection] close.complete

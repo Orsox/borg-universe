@@ -1,0 +1,6 @@
+2026-04-12 06:28:47,261 DEBUG [asyncio] Using proactor: IocpProactor
+2026-04-12 06:28:47,266 INFO [httpx] HTTP Request: GET http://testserver/tasks "HTTP/1.1 200 OK"
+2026-04-12 06:31:37,708 DEBUG [asyncio] Using proactor: IocpProactor
+2026-04-12 06:31:37,712 INFO [httpx] HTTP Request: GET http://testserver/tasks "HTTP/1.1 200 OK"
+2026-04-12 06:32:56,746 DEBUG [asyncio] Using proactor: IocpProactor
+2026-04-12 06:32:56,751 INFO [httpx] HTTP Request: GET http://testserver/tasks "HTTP/1.1 200 OK"

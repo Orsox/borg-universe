@@ -1,0 +1,63 @@
+{% extends "ui_template.html" %}
+
+{% block title %}Workflow Settings - Borg Universe{% endblock %}
+{% block eyebrow %}Workflows{% endblock %}
+{% block heading %}Workflow definitions{% endblock %}
+{% block summary %}Edit local workflow YAML files with nodes, tasks, prompts, status values, and execution steps.{% endblock %}
+{% block page_actions %}
+<a class="button secondary" href="/workflows">Back to workflows</a>
+{% endblock %}
+
+{% block notices %}
+{% if message %}
+<div class="callout danger">
+  <strong>YAML not saved:</strong>
+  {{ message }}
+</div>
+{% else %}
+<div class="callout">
+  <strong>Storage:</strong>
+  Workflow definitions are written to <code>BORG/workflows</code> and validated before saving.
+</div>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+{% include "partials/status_strip.html" %}
+
+<section class="section panel">
+  <div class="panel-header">
+    <h2>YAML editor</h2>
+    <span class="badge queued">{{ selected_file }}</span>
+  </div>
+  <div class="panel-body">
+    {% if files %}
+    <form method="get" action="/workflows/settings" class="filters">
+      <label class="full">Workflow file
+        <select name="file">
+          {% for file in files %}
+          <option value="{{ file }}" {% if file == selected_file %}selected{% endif %}>{{ file }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit" class="secondary">Load</button>
+    </form>
+    {% endif %}
+
+    <form method="post" action="/workflows/settings">
+      <div class="form-grid">
+        <label class="full">Filename
+          <input name="filename" value="{{ selected_file }}" required pattern="[^\\/]+\.ya?ml" title="Use a local .yaml or .yml filename without path separators.">
+        </label>
+        <label class="full">Workflow YAML
+          <textarea name="yaml_content" rows="30" spellcheck="false" required>{{ yaml_content }}</textarea>
+        </label>
+      </div>
+      <div class="actions">
+        <button type="submit">Save workflow</button>
+        <a class="button secondary" href="/workflows">Cancel</a>
+      </div>
+    </form>
+  </div>
+</section>
+{% endblock %}

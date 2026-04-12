@@ -1,0 +1,60 @@
+{% extends "ui_template.html" %}
+
+{% block title %}MCP Audit - Borg Universe{% endblock %}
+{% block eyebrow %}MCP{% endblock %}
+{% block heading %}MCP Audit{% endblock %}
+{% block summary %}Traceable access to Supabase data by agents, skills, and tools.{% endblock %}
+
+{% block content %}
+<form class="filters" method="get" action="/audit">
+  {% for field in filter_fields %}
+  <label>{{ field|pretty }}
+    <input name="{{ field }}" value="{{ filters.get(field, '') }}">
+  </label>
+  {% endfor %}
+  <label>Success
+    <select name="success">
+      <option value="">all</option>
+      <option value="true" {% if filters.get("success") == "true" %}selected{% endif %}>true</option>
+      <option value="false" {% if filters.get("success") == "false" %}selected{% endif %}>false</option>
+    </select>
+  </label>
+  <button type="submit">Filter</button>
+  <a class="button secondary" href="/audit">Clear</a>
+</form>
+
+<section class="section">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Tool</th>
+          <th>Agent</th>
+          <th>Skill</th>
+          <th>Task</th>
+          <th>Hits</th>
+          <th>Status</th>
+          <th>Query</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for log in logs %}
+        <tr>
+          <td>{{ log.created_at }}</td>
+          <td>{{ log.tool_name }}</td>
+          <td>{{ log.agent_name or "" }}</td>
+          <td>{{ log.skill_name or "" }}</td>
+          <td>{% if log.task_id %}<a href="/tasks/{{ log.task_id }}">{{ log.task_id }}</a>{% endif %}</td>
+          <td>{{ log.result_count }}</td>
+          <td><span class="badge {{ log.success|badge_class }}">{{ "success" if log.success else "failed" }}</span></td>
+          <td><pre>{{ log.query }}</pre>{% if log.error %}<p class="muted">{{ log.error }}</p>{% endif %}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8">{% include "partials/empty.html" with context %}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

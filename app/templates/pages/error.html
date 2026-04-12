@@ -1,0 +1,28 @@
+{% extends "ui_template.html" %}
+
+{% block title %}{{ title }} - Borg Universe{% endblock %}
+{% block eyebrow %}Node status{% endblock %}
+{% block heading %}{{ title }}{% endblock %}
+{% block summary %}The local node could not complete the requested operation.{% endblock %}
+{% block page_actions %}
+<a class="button secondary" href="/tasks">Go to tasks</a>
+<a class="button secondary" href="/agents">Manage agents</a>
+{% endblock %}
+
+{% block notices %}{% endblock %}
+
+{% block content %}
+<section class="section panel">
+  <div class="panel-header">
+    <h2>Status {{ status_code }}</h2>
+    <span class="badge review_required">intervention</span>
+  </div>
+  <div class="panel-body">
+    <div class="callout warning">
+      <strong>Node message:</strong>
+      {{ detail }}
+    </div>
+    <p class="muted">Check the local configuration and then retry the requested route.</p>
+  </div>
+</section>
+{% endblock %}
