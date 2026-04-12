@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import time
+from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from app.core.config import Settings
 from app.db.repositories import ArtifactRepository, TaskRepository
+from app.services.claude_code_client import ClaudeCodeClient, ClaudeCodeClientError, ClaudeCodeWorkspace
 from app.models.workflows import WorkflowDefinition, WorkflowNode, WorkflowTask
 from app.services.local_llm_client import LocalLlmClient, LocalLlmClientError
+from app.services.orchestration_settings_store import OrchestrationSettings
 from app.services.orchestration_settings_store import OrchestrationSettingsStore
 from app.services.workflow_store import WorkflowStore, WorkflowStoreError
 
@@ -28,6 +32,7 @@ class AgentWorker:
         workflow_store: WorkflowStore | None = None,
         orchestration_store: OrchestrationSettingsStore | None = None,
         local_llm_client: Any | None = None,
+        claude_code_client: Any | None = None,
     ) -> None:
         self.task_repository = task_repository
         self.artifact_repository = artifact_repository
@@ -35,6 +40,7 @@ class AgentWorker:
         self.workflow_store = workflow_store or WorkflowStore(settings.workflows_root)
         self.orchestration_store = orchestration_store or OrchestrationSettingsStore(settings.borg_root)
         self.local_llm_client = local_llm_client
+        self.claude_code_client = claude_code_client
 
     def process_next_batch(self) -> int:
         tasks = self.task_repository.list_by_status("queued", self._queue_parallelism())
@@ -183,6 +189,10 @@ class AgentWorker:
     def _run_local_llm_processing(self, task: dict[str, Any]) -> dict[str, Any]:
         task_id = task["id"]
         review_context = self._latest_review_context(self.task_repository.list_events(task_id))
+        orchestration = self.orchestration_store.load()
+        if self._should_use_claude_code(orchestration):
+            return self._run_claude_code_processing(task, review_context, orchestration)
+
         self.task_repository.add_event(
             task_id,
             "llm_processing_started",
@@ -194,7 +204,6 @@ class AgentWorker:
             },
         )
 
-        orchestration = self.orchestration_store.load()
         client = self.local_llm_client or LocalLlmClient(orchestration.local_model)
         prompts = [
             self._llm_planning_prompt(task, review_context),
@@ -281,6 +290,16 @@ class AgentWorker:
     ) -> dict[str, Any]:
         task_id = task["id"]
         stage_index = int(resume_context.get("resume_stage_index", 1))
+        orchestration = self.orchestration_store.load()
+        if self._should_use_claude_code(orchestration):
+            return self._run_claude_code_processing(
+                task,
+                review_context,
+                orchestration,
+                phase="review_resume",
+                resume_context=resume_context,
+            )
+
         self.task_repository.add_event(
             task_id,
             "llm_resume_processing_started",
@@ -293,7 +312,6 @@ class AgentWorker:
             },
         )
 
-        orchestration = self.orchestration_store.load()
         client = self.local_llm_client or LocalLlmClient(orchestration.local_model)
         prompt = self._llm_review_resume_prompt(task, review_context, stage_index)
         self.task_repository.add_event(
@@ -366,6 +384,331 @@ class AgentWorker:
         )
         return plan
 
+    def _should_use_claude_code(self, orchestration: OrchestrationSettings) -> bool:
+        if self.local_llm_client is not None:
+            return False
+        if self.claude_code_client is not None:
+            return True
+        system = orchestration.agent_selection.agent_system
+        model_name = (orchestration.local_model.model_name or "").strip().lower()
+        agent_name = (orchestration.agent_selection.agent_name or "").strip().lower()
+        return system in {"claude_code", "cloud_code"} or model_name == "borg-cpu" or agent_name == "borg-cpu"
+
+    def _run_claude_code_processing(
+        self,
+        task: dict[str, Any],
+        review_context: dict[str, str] | None,
+        orchestration: OrchestrationSettings,
+        *,
+        phase: str = "planning",
+        resume_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        task_id = task["id"]
+        host_path, container_path = self._task_project_paths(task)
+        workspace_project_root = self._task_project_root(task)
+        mcp_config_json = self._pycharm_mcp_config_json(task)
+        if self.claude_code_client is not None:
+            client = self.claude_code_client
+        else:
+            client = ClaudeCodeClient(
+                settings=self.settings,
+                orchestration=orchestration,
+                workspace=ClaudeCodeWorkspace(
+                    project_root=workspace_project_root,
+                    agents_source=self.settings.agents_root,
+                    skills_source=self.settings.skills_root,
+                )
+                if workspace_project_root
+                else None,
+                mcp_config_json=mcp_config_json,
+            )
+        try:
+            assets = client.ensure_project_assets()
+        except Exception as exc:
+            self.task_repository.add_event(
+                task_id,
+                "claude_assets_sync_failed",
+                "Claude Code project agent and skill sync failed.",
+                {"error": str(exc)},
+            )
+            raise RuntimeError(f"Claude Code asset sync failed: {exc}") from exc
+
+        self.task_repository.add_event(
+            task_id,
+            "claude_assets_synced",
+            "Claude Code project agents and skills are available in the project .claude directory.",
+            assets,
+        )
+        prompt = self._claude_code_prompt(task, review_context, phase=phase, resume_context=resume_context)
+        event_type = "llm_resume_processing_started" if phase == "review_resume" else "llm_processing_started"
+        self.task_repository.add_event(
+            task_id,
+            event_type,
+            "Claude Code background delegation started.",
+            {
+                "provider": "claude_code",
+                "phase": phase,
+                "model": orchestration.local_model.model_name or orchestration.agent_selection.agent_name or "borg-cpu",
+                "local_path": host_path or task.get("local_path"),
+                "container_path": str(container_path) if container_path else None,
+                "pycharm_mcp_enabled": bool(task.get("pycharm_mcp_enabled")),
+                "review_context": review_context,
+            },
+        )
+        if not bool(task.get("pycharm_mcp_enabled")):
+            self.task_repository.add_event(
+                task_id,
+                "pycharm_mcp_skipped",
+                "PyCharm MCP was not enabled for this task, so no IDE handoff was attempted.",
+                {"enabled": False, "local_path": task.get("local_path")},
+            )
+        self.task_repository.add_event(
+            task_id,
+            "llm_request",
+            "Claude Code request sent for agent delegation.",
+            {
+                "iteration": 1,
+                "phase": phase,
+                "provider": "claude_code",
+                "model": orchestration.local_model.model_name or orchestration.agent_selection.agent_name or "borg-cpu",
+                "prompt": prompt,
+            },
+        )
+        try:
+            result = client.send_prompt(prompt)
+        except ClaudeCodeClientError as exc:
+            failure_type = "llm_resume_processing_failed" if phase == "review_resume" else "llm_processing_failed"
+            self.task_repository.add_event(
+                task_id,
+                failure_type,
+                "Claude Code background delegation failed.",
+                {"phase": phase, "error": str(exc)},
+            )
+            raise RuntimeError(f"Claude Code processing failed: {exc}") from exc
+
+        output = str(result.get("content", "")).strip()
+        parsed = _parse_json_object(output)
+        summary = str(parsed.get("summary") or output[:500]).strip()
+        cube_path = None
+        cube_written = False
+        if phase == "planning":
+            cube_path, cube_written = self._maybe_write_borg_cube(task, assets, parsed, output)
+        plan = {
+            "summary": summary,
+            "first_node_id": str(parsed["first_node_id"]) if parsed.get("first_node_id") else None,
+            "iterations": [{"iteration": 1, "phase": phase, "output": output}],
+            "provider": "claude_code",
+            "claude_response": result.get("response"),
+            "review_context": review_context,
+        }
+        if resume_context:
+            plan["resume_stage_index"] = int(resume_context.get("resume_stage_index", 1))
+
+        self.task_repository.add_event(
+            task_id,
+            "llm_response",
+            "Claude Code response received for agent delegation.",
+            {
+                "iteration": 1,
+                "phase": phase,
+                "provider": "claude_code",
+                "model": orchestration.local_model.model_name or orchestration.agent_selection.agent_name or "borg-cpu",
+                "response": output,
+                "parsed": parsed,
+                "command": result.get("command"),
+                "stderr": result.get("stderr"),
+            },
+        )
+        if cube_path:
+            self.task_repository.add_event(
+                task_id,
+                "borg_cube_written",
+                "Claude Code architecture output was written to borg-cube.md.",
+                {"path": cube_path, "written": cube_written},
+            )
+        self.task_repository.add_event(
+            task_id,
+            "llm_iteration_completed",
+            "Claude Code delegation iteration completed.",
+            {
+                "iteration": 1,
+                "phase": phase,
+                "provider": "claude_code",
+                "prompt": prompt,
+                "output": output,
+                "parsed": parsed,
+            },
+        )
+        completed_type = "llm_resume_processing_completed" if phase == "review_resume" else "llm_processing_completed"
+        self.task_repository.add_event(
+            task_id,
+            completed_type,
+            "Claude Code completed background delegation; workflow node selection can begin.",
+            {
+                "summary": summary,
+                "first_node_id": plan["first_node_id"],
+                "resume_stage_index": plan.get("resume_stage_index"),
+                "human_review_text": self._render_llm_human_review_text(plan),
+                "provider": "claude_code",
+            },
+        )
+        return plan
+
+    def _claude_code_prompt(
+        self,
+        task: dict[str, Any],
+        review_context: dict[str, str] | None,
+        *,
+        phase: str,
+        resume_context: dict[str, Any] | None,
+    ) -> str:
+        host_path, container_path = self._task_project_paths(task)
+        assigned_agent = task.get("assigned_agent") or "borg-queen-architect"
+        if str(assigned_agent) in {"local-llm", "mock-agent"}:
+            assigned_agent = "borg-queen-architect"
+        lines = [
+            "Run this Borg Universe task through Claude Code in background mode.",
+            "Use project subagents from `.claude/agents` and project skills from `.claude/skills`.",
+            "Prefer project-local agents and skills over global equivalents.",
+            f"Delegate first to the `{assigned_agent}` subagent unless the workflow context specifies a more precise node agent.",
+            "Return compact JSON with keys: summary, first_node_id, borg_cube_md, delegated_agents, verification.",
+            "For architecture tasks, borg_cube_md shall contain the complete borg-cube.md content for the project root.",
+            f"Phase: {phase}",
+            f"Title: {task.get('title')}",
+            f"Description: {task.get('description')}",
+            f"Target project path on host: {host_path or task.get('local_path')}",
+            f"Target project path in container: {container_path or host_path or task.get('local_path')}",
+            f"PyCharm MCP enabled: {bool(task.get('pycharm_mcp_enabled'))}",
+            f"Workflow: {task.get('workflow_id')}",
+        ]
+        if bool(task.get("pycharm_mcp_enabled")):
+            lines.append("Use the PyCharm MCP file tools for project file reads and writes when they are available.")
+        if resume_context:
+            lines.append(f"Resume workflow stage index: {resume_context.get('resume_stage_index', 1)}")
+            lines.append("The workflow stage is already selected by Borg Universe; do not override it.")
+        if review_context:
+            lines.append("Human review context:")
+            if review_context.get("notes"):
+                lines.append(f"Review notes: {review_context['notes']}")
+            if review_context.get("summary"):
+                lines.append(f"Previous summary: {review_context['summary']}")
+            if review_context.get("output"):
+                lines.append("Previous output:")
+                lines.append(review_context["output"])
+        lines.extend(self._claude_workflow_context_lines(task))
+        return "\n".join(lines)
+
+    def _pycharm_mcp_config_json(self, task: dict[str, Any]) -> str | None:
+        if not bool(task.get("pycharm_mcp_enabled")):
+            return None
+
+        endpoint = self._pycharm_mcp_endpoint(task)
+        if not endpoint:
+            return None
+
+        transport, url = endpoint
+        config = {
+            "mcpServers": {
+                "pycharm": {
+                    "type": transport,
+                    "url": url,
+                }
+            }
+        }
+        return json.dumps(config, ensure_ascii=False)
+
+    def _pycharm_mcp_endpoint(self, task: dict[str, Any]) -> tuple[str, str] | None:
+        for candidate in (task, self._project_for_task(task)):
+            if not candidate:
+                continue
+            stream_url = _clean_text(candidate.get("pycharm_mcp_stream_url"))
+            if stream_url:
+                return ("http", stream_url)
+            sse_url = _clean_text(candidate.get("pycharm_mcp_sse_url"))
+            if sse_url:
+                return ("sse", sse_url)
+        return None
+
+    def _project_for_task(self, task: dict[str, Any]) -> dict[str, Any] | None:
+        project_id = _clean_text(task.get("project_id"))
+        if not project_id:
+            return None
+        client = getattr(self.task_repository, "client", None)
+        if client is None or not hasattr(client, "request"):
+            return None
+        try:
+            rows = client.request(
+                "GET",
+                "projects",
+                query={"select": "*", "id": f"eq.{project_id}", "limit": "1"},
+            )
+        except Exception:
+            return None
+        return rows[0] if rows else None
+
+    def _task_project_paths(self, task: dict[str, Any]) -> tuple[str | None, Path | None]:
+        host_path = _clean_text(task.get("local_path"))
+        if not host_path:
+            return None, None
+        container_path = _map_workbench_path(host_path)
+        return host_path, container_path
+
+    def _task_project_root(self, task: dict[str, Any]) -> Path | None:
+        host_path, container_path = self._task_project_paths(task)
+        if container_path:
+            return container_path
+        if host_path:
+            try:
+                return Path(host_path).expanduser()
+            except Exception:
+                return None
+        return None
+
+    def _claude_workflow_context_lines(self, task: dict[str, Any]) -> list[str]:
+        workflow_id = task.get("workflow_id")
+        if not workflow_id:
+            return []
+        try:
+            workflow = self.workflow_store.get_workflow(str(workflow_id))
+        except WorkflowStoreError:
+            return []
+        if not workflow:
+            return []
+        lines = ["Workflow agent context:"]
+        for stage_index, stage in enumerate(self.workflow_store.build_stages(workflow), start=1):
+            lines.append(f"Level {stage_index}: {stage.title} ({stage.mode})")
+            for node in stage.nodes:
+                skills = self._select_skills(node, task)
+                lines.append(
+                    f"- node_id={node.id}; agent={node.agent or 'default'}; borg_name={node.borg_name}; skills={', '.join(skills) or 'none'}"
+                )
+                for workflow_task in node.tasks:
+                    if workflow_task.prompt:
+                        lines.append(f"  task={workflow_task.id}: {workflow_task.prompt}")
+        return lines
+
+    def _maybe_write_borg_cube(
+        self,
+        task: dict[str, Any],
+        assets: dict[str, Any],
+        parsed: dict[str, Any],
+        output: str,
+    ) -> tuple[str | None, bool]:
+        project_root_value = assets.get("project_root") or self.settings.borg_root
+        project_root = Path(str(project_root_value))
+        cube_path = project_root / "borg-cube.md"
+        cube_content = ""
+        if isinstance(parsed.get("borg_cube_md"), str) and parsed["borg_cube_md"].strip():
+            cube_content = parsed["borg_cube_md"].strip()
+        elif output.lstrip().startswith(("#", "---")):
+            cube_content = output
+        if not cube_content:
+            return None, False
+
+        cube_path.parent.mkdir(parents=True, exist_ok=True)
+        cube_path.write_text(cube_content.rstrip() + "\n", encoding="utf-8")
+        return str(cube_path), True
+
     def _llm_planning_prompt(self, task: dict[str, Any], review_context: dict[str, str] | None = None) -> str:
         review_lines: list[str] = []
         if review_context:
@@ -394,6 +737,7 @@ class AgentWorker:
         review_context: dict[str, str] | None,
         stage_index: int,
     ) -> str:
+        host_path, container_path = self._task_project_paths(task)
         lines = [
             "You are resuming an agentic workflow after human review.",
             "The workflow stage is already selected by the system; do not choose or change the first node.",
@@ -402,7 +746,8 @@ class AgentWorker:
             f"Next workflow level: {stage_index + 1}",
             f"Title: {task.get('title')}",
             f"Description: {task.get('description')}",
-            f"Local path: {task.get('local_path')}",
+            f"Local path on host: {host_path or task.get('local_path')}",
+            f"Local path in container: {container_path or host_path or task.get('local_path')}",
             f"PyCharm MCP enabled: {bool(task.get('pycharm_mcp_enabled'))}",
             f"Workflow: {task.get('workflow_id')}",
         ]
@@ -719,3 +1064,28 @@ def _parse_json_object(value: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _clean_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _map_workbench_path(host_path: str) -> Path | None:
+    normalized_host = host_path.replace("\\", "/").rstrip("/")
+    if not normalized_host:
+        return None
+    host_root = os.getenv("WORKBENCH_HOST_ROOT", r"D:\Workbench").replace("\\", "/").rstrip("/")
+    container_root = os.getenv("WORKBENCH_CONTAINER_ROOT", "/workbench").replace("\\", "/").rstrip("/")
+
+    if normalized_host.lower() == host_root.lower():
+        return Path(container_root)
+    prefix = host_root + "/"
+    if normalized_host.lower().startswith(prefix.lower()):
+        suffix = normalized_host[len(host_root) + 1 :]
+        return Path(f"{container_root}/{suffix}") if suffix else Path(container_root)
+    if normalized_host.startswith("/"):
+        return Path(normalized_host)
+    return None

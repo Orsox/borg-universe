@@ -106,6 +106,12 @@ services:
       MCP_SERVER_URL: ${MCP_SERVER_URL:-http://mcp:9000}
       WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-5}
       WORKER_BATCH_SIZE: ${WORKER_BATCH_SIZE:-4}
+      CLAUDE_EXECUTABLE: ${CLAUDE_EXECUTABLE:-claude}
+      CLAUDE_PROJECT_ROOT: ${CLAUDE_PROJECT_ROOT:-/app}
+      WORKBENCH_HOST_ROOT: ${WORKBENCH_HOST_ROOT:-D:\Workbench}
+      WORKBENCH_CONTAINER_ROOT: ${WORKBENCH_CONTAINER_ROOT:-/workbench}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-1800}
+      CLAUDE_TIMEOUT_SECONDS: ${CLAUDE_TIMEOUT_SECONDS:-1800}
       SUPABASE_URL: ${SUPABASE_URL:-http://supabase-rest:3000}
       SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlLWxvY2FsLWRldiIsImlhdCI6MTczNTY4OTYwMCwiZXhwIjo0MTAyNDQ0ODAwfQ.b0GjcWDNzpg-2bV9HUT1WSyeYZO9nbeXLhZCJqCPST8}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UtbG9jYWwtZGV2IiwiaWF0IjoxNzM1Njg5NjAwLCJleHAiOjQxMDI0NDQ4MDB9.BbY6G10B6UChkgQZ7EFDc5dTzPvQ7gKPKaKQ-U1zvpY}
@@ -120,6 +126,8 @@ services:
       - ./agents:/app/agents
       - ./skills:/app/skills
       - ./BORG:/app/BORG
+      - D:/Workbench:/workbench
+      - ./.claude:/app/.claude
       - ./main.py:/app/main.py
       - ./artifacts:/app/artifacts
     restart: unless-stopped

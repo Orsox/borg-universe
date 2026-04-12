@@ -4,9 +4,17 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV APP_HOST=0.0.0.0
 ENV APP_PORT=8000
+ENV DEBIAN_FRONTEND=noninteractive
 
 WORKDIR /app
-RUN mkdir -p /app/BORG /app/artifacts
+RUN mkdir -p /app/BORG /app/artifacts /app/.claude
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates nodejs npm \
+    && npm install -g @anthropic-ai/claude-code \
+    && claude --version \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

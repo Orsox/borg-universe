@@ -36,6 +36,15 @@ class ProjectRepository:
             prefer="return=representation",
         )[0]
 
+    def delete_project(self, project_id: str) -> bool:
+        self.client.request(
+            "DELETE",
+            "projects",
+            query={"id": f"eq.{project_id}"},
+            prefer="return=minimal",
+        )
+        return True
+
 
 class TaskRepository:
     def __init__(self, client: SupabaseRestClient) -> None:

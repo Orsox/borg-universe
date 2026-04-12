@@ -5,6 +5,7 @@ tools: Read, Glob, Grep, Write, Edit
 model: inherit
 color: red
 memory: user
+background: true
 skills:
   - borg-cube-printer
   - borg-cube-inspector
@@ -47,6 +48,13 @@ This agent **requires** a feature description as input. The caller must provide:
 - Propose refactoring strategies when existing code conflicts with the new design.
 - Detect and flag architectural risks, ambiguities, or missing requirements.
 - Produce a written architecture document as a deliverable.
+- When Claude Code is the execution layer, use project-local Claude resources:
+  - agents from `<project_directory>/.claude/agents`
+  - skills from `<project_directory>/.claude/skills`
+  - source assets from the Borg Universe `agents/` and `skills/` directories
+- Before delegating task commands, verify that the Claude project subdirectories exist.
+  If neither the global Claude directory nor the project-local Claude directory contains the required `agents` or `skills` subdirectory, copy the Borg Universe project agents or skills into the project-local `.claude` directory.
+- Route commands entered under Borg Universe `tasks` through Claude Code with the configured local model, for example `claude -p <task> --model borg-cpu`, and hand off to the matching project subagent.
 
 ---
 

@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from app.core.config import Settings
 from app.db.repositories import ArtifactRepository, TaskRepository
 from app.services.agent_worker import AgentWorker
-from app.services.orchestration_settings_store import ExecutionSettings, OrchestrationSettingsStore
+from app.services.orchestration_settings_store import (
+    AgentSelectionSettings,
+    ExecutionSettings,
+    LocalModelSettings,
+    OrchestrationSettingsStore,
+)
 from tests.fakes import FakeSupabaseClient
 
 
@@ -18,6 +24,33 @@ class FakeLocalLlmClient:
         if len(self.calls) == 3:
             return {"content": '{"first_node_id": "intake", "summary": "Start with intake."}'}
         return {"content": '{"summary": "Plan next steps."}'}
+
+
+class FakeClaudeCodeClient:
+    def __init__(self, project_root: str = "D:\\Workbench\\borg-universe") -> None:
+        self.prompts: list[str] = []
+        self.project_root = project_root
+
+    def ensure_project_assets(self) -> dict[str, object]:
+        return {
+            "project_root": self.project_root,
+            "local_claude_root": f"{self.project_root}\\.claude",
+            "global_agents_exists": False,
+            "local_agents_exists": True,
+            "global_skills_exists": False,
+            "local_skills_exists": True,
+            "agents": [".claude\\agents\\borg-queen-architect.md"],
+            "skills": [".claude\\skills\\borg-cube-printer\\SKILL.md"],
+        }
+
+    def send_prompt(self, prompt: str) -> dict[str, object]:
+        self.prompts.append(prompt)
+        return {
+            "content": '{"first_node_id": "intake", "summary": "Claude delegated to Borg agents.", "borg_cube_md": "# Feature Specification\\n\\nDemo\\n"}',
+            "response": {"result": "Claude delegated to Borg agents.", "borg_cube_md": "# Feature Specification\n\nDemo\n"},
+            "command": ["claude", "-p", "<prompt>", "--model", "borg-cpu"],
+            "stderr": "",
+        }
 
 
 def test_worker_uses_web_parallelism_and_runs_workflow_nodes_in_order(tmp_path: Path) -> None:
@@ -216,6 +249,210 @@ steps:
     assert "Please keep the generated summary and continue." in llm.calls[0]
     assert "Use the existing summary for the next step." in llm.calls[0]
     assert "Iteration 1" in llm.calls[0]
+
+
+def test_worker_delegates_borg_cpu_tasks_to_claude_code_with_project_agents(tmp_path: Path) -> None:
+    workflows_root = tmp_path / "workflows"
+    workflows_root.mkdir()
+    (workflows_root / "demo.yaml").write_text(
+        """id: demo
+title: Demo
+description: Claude Code delegation test.
+status: draft
+entry_node: intake
+nodes:
+  - id: intake
+    borg_name: Queen
+    agent: borg-queen-architect
+    tasks:
+      - id: architecture-planning
+        title: Plan architecture
+        prompt: Route this through the queen architect.
+steps:
+  - id: intake
+    title: Intake
+    mode: sequential
+    nodes:
+      - intake
+""",
+        encoding="utf-8",
+    )
+    settings = _settings(tmp_path, workflows_root)
+    OrchestrationSettingsStore(settings.borg_root).save(
+        agent_selection=AgentSelectionSettings(agent_system="local_model", agent_name="borg-cpu"),
+        local_model=LocalModelSettings(
+            ip_address="host.docker.internal",
+            port=12345,
+            api_key="lmstudio",
+            model_name="borg-cpu",
+        ),
+    )
+    client = FakeSupabaseClient(
+        {
+            "tasks": [
+                {
+                    "id": "t1",
+                    "title": "Task 1",
+                    "description": "Implement the requested change.",
+                    "status": "queued",
+                    "workflow_id": "demo",
+                    "assigned_agent": "local-llm",
+                    "local_path": r"D:\Workbench\target",
+                }
+            ],
+            "task_events": [],
+            "artifacts": [],
+        }
+    )
+    claude = FakeClaudeCodeClient(project_root=str(tmp_path))
+    worker = AgentWorker(
+        task_repository=TaskRepository(client),  # type: ignore[arg-type]
+        artifact_repository=ArtifactRepository(client),  # type: ignore[arg-type]
+        settings=settings,
+        claude_code_client=claude,
+    )
+
+    worker.process_next_batch()
+
+    assert len(claude.prompts) == 1
+    assert "Use project subagents from `.claude/agents`" in claude.prompts[0]
+    assert "`borg-queen-architect` subagent" in claude.prompts[0]
+    assert "node_id=intake; agent=borg-queen-architect" in claude.prompts[0]
+    event_types = [event["event_type"] for event in client.tables["task_events"]]
+    assert "claude_assets_synced" in event_types
+    assert "llm_processing_completed" in event_types
+    completed_event = next(
+        event for event in client.tables["task_events"] if event["event_type"] == "llm_processing_completed"
+    )
+    assert completed_event["payload"]["provider"] == "claude_code"
+    assert completed_event["payload"]["first_node_id"] == "intake"
+    assert (tmp_path / "borg-cube.md").exists()
+    assert "Feature Specification" in (tmp_path / "borg-cube.md").read_text(encoding="utf-8")
+    assert any(event["event_type"] == "borg_cube_written" for event in client.tables["task_events"])
+    assert client.tables["tasks"][0]["status"] == "review_required"
+
+
+def test_worker_passes_pycharm_mcp_config_from_project_to_claude_code(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    workflows_root = tmp_path / "workflows"
+    workflows_root.mkdir()
+    (workflows_root / "demo.yaml").write_text(
+        """id: demo
+title: Demo
+description: Claude Code delegation test.
+status: draft
+entry_node: intake
+nodes:
+  - id: intake
+    borg_name: Queen
+    agent: borg-queen-architect
+    tasks:
+      - id: architecture-planning
+        title: Plan architecture
+        prompt: Route this through the queen architect.
+steps:
+  - id: intake
+    title: Intake
+    mode: sequential
+    nodes:
+      - intake
+""",
+        encoding="utf-8",
+    )
+    settings = _settings(tmp_path, workflows_root)
+    OrchestrationSettingsStore(settings.borg_root).save(
+        agent_selection=AgentSelectionSettings(agent_system="local_model", agent_name="borg-cpu"),
+        local_model=LocalModelSettings(
+            ip_address="host.docker.internal",
+            port=12345,
+            api_key="lmstudio",
+            model_name="borg-cpu",
+        ),
+    )
+    client = FakeSupabaseClient(
+        {
+            "tasks": [
+                {
+                    "id": "t1",
+                    "title": "Task 1",
+                    "description": "Implement the requested change.",
+                    "status": "queued",
+                    "workflow_id": "demo",
+                    "assigned_agent": "local-llm",
+                    "project_id": "project-1",
+                    "local_path": r"D:\Workbench\firststart",
+                    "pycharm_mcp_enabled": True,
+                }
+            ],
+            "projects": [
+                {
+                    "id": "project-1",
+                    "name": "Automation Tools",
+                    "pycharm_mcp_enabled": True,
+                    "pycharm_mcp_sse_url": "http://127.0.0.1:64769/sse",
+                    "pycharm_mcp_stream_url": "http://127.0.0.1:64769/stream",
+                }
+            ],
+            "task_events": [],
+            "artifacts": [],
+        }
+    )
+    captured: dict[str, object] = {}
+
+    class CapturingClaudeCodeClient:
+        def __init__(self, *, settings, orchestration, workspace=None, runner=None, timeout_seconds=None, mcp_config_json=None):
+            captured["mcp_config_json"] = mcp_config_json
+            captured["project_root"] = str(workspace.project_root) if workspace else None
+            self.prompts: list[str] = []
+
+        def ensure_project_assets(self) -> dict[str, object]:
+            return {
+                "project_root": str(tmp_path),
+                "local_claude_root": f"{tmp_path}\\.claude",
+                "global_agents_exists": False,
+                "local_agents_exists": True,
+                "global_skills_exists": False,
+                "local_skills_exists": True,
+                "agents": [".claude\\agents\\borg-queen-architect.md"],
+                "skills": [".claude\\skills\\borg-cube-printer\\SKILL.md"],
+            }
+
+        def send_prompt(self, prompt: str) -> dict[str, object]:
+            self.prompts.append(prompt)
+            captured["prompt"] = prompt
+            return {
+                "content": '{"first_node_id": "intake", "summary": "Claude delegated to Borg agents.", "borg_cube_md": "# Feature Specification\\n\\nDemo\\n"}',
+                "response": {"result": "Claude delegated to Borg agents.", "borg_cube_md": "# Feature Specification\n\nDemo\n"},
+                "command": ["claude", "--bare", "--no-session-persistence", "-p", "<prompt>", "--model", "borg-cpu", "--output-format", "json"],
+                "stderr": "",
+            }
+
+    monkeypatch.setattr("app.services.agent_worker.ClaudeCodeClient", CapturingClaudeCodeClient)
+
+    worker = AgentWorker(
+        task_repository=TaskRepository(client),  # type: ignore[arg-type]
+        artifact_repository=ArtifactRepository(client),  # type: ignore[arg-type]
+        settings=settings,
+    )
+
+    worker.process_next_batch()
+
+    assert json.loads(str(captured["mcp_config_json"])) == {
+        "mcpServers": {
+            "pycharm": {
+                "type": "http",
+                "url": "http://127.0.0.1:64769/stream",
+            }
+        }
+    }
+    assert str(captured["project_root"]).replace("\\", "/") == "/workbench/firststart"
+    prompt_text = str(captured["prompt"]).replace("\\", "/")
+    assert "Use the PyCharm MCP file tools" in prompt_text
+    assert "Target project path on host: D:/Workbench/firststart" in prompt_text
+    assert "Target project path in container: /workbench/firststart" in prompt_text
+    assert client.tables["tasks"][0]["status"] == "review_required"
 
 
 def test_worker_resume_after_review_forwards_notes_to_llm_and_runs_next_workflow_level(tmp_path: Path) -> None:

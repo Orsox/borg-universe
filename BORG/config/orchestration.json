@@ -11,7 +11,7 @@
     "model_name": "borg-cpu"
   },
   "execution": {
-    "max_parallel_tasks": 4
+    "max_parallel_tasks": 1
   },
   "updated_at": "2026-04-12T07:11:44.185856+00:00"
 }

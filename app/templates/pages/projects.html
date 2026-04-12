@@ -1,0 +1,91 @@
+{% extends "ui_template.html" %}
+
+{% block title %}Projects{% endblock %}
+{% block eyebrow %}Projects{% endblock %}
+{% block heading %}Project Overview{% endblock %}
+{% block summary %}All projects currently stored in the database are listed here with a direct delete action for emergency cleanup.{% endblock %}
+{% block page_actions %}
+<a class="button secondary" href="/">Back to home</a>
+<a class="button" href="/projects/new">New project</a>
+{% endblock %}
+
+{% block notices %}
+<div class="callout warning">
+  <strong>Deletion is immediate:</strong>
+  Removing a project deletes the database row only. Review linked tasks before using it as an emergency action.
+</div>
+{% endblock %}
+
+{% block content %}
+<section class="section panel">
+  <div class="panel-header">
+    <h2>Stored projects</h2>
+    <span class="badge">{{ project_count }}</span>
+  </div>
+  <div class="panel-body">
+    {% if project_error %}
+    <div class="callout danger">
+      <strong>Project storage unavailable:</strong>
+      {{ project_error }}
+    </div>
+    {% endif %}
+
+    {% if projects %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Directory</th>
+            <th>MCP</th>
+            <th>Defaults</th>
+            <th>Status</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for project in projects %}
+          <tr>
+            <td>
+              <strong>{{ project.name }}</strong><br>
+              <small class="muted">{{ project.id }}</small>
+            </td>
+            <td>{{ project.project_type|default("stm")|pretty }}</td>
+            <td><code>{{ project.project_directory or "" }}</code></td>
+            <td>
+              {% if project.pycharm_mcp_enabled %}<span class="badge done">enabled</span>{% else %}<span class="badge disabled">off</span>{% endif %}
+              {% if project.pycharm_mcp_stream_url %}
+              <br><small>Stream: <code>{{ project.pycharm_mcp_stream_url }}</code></small>
+              {% endif %}
+              {% if project.pycharm_mcp_sse_url %}
+              <br><small>SSE: <code>{{ project.pycharm_mcp_sse_url }}</code></small>
+              {% endif %}
+            </td>
+            <td>
+              <small>
+                {{ project.default_platform or "" }} {{ project.default_mcu or "" }} {{ project.default_board or "" }} {{ project.default_topic or "" }}
+              </small>
+            </td>
+            <td>
+              {% if project.active %}<span class="badge done">active</span>{% else %}<span class="badge disabled">inactive</span>{% endif %}
+            </td>
+            <td>
+              <form class="inline-form" method="post" action="/projects/{{ project.id }}/delete" onsubmit="return confirm('Delete project {{ project.name|e }}?');">
+                <button class="danger" type="submit">Delete</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty">
+      <strong>No projects stored</strong>
+      <p>Create a project first if you want it to appear here.</p>
+    </div>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

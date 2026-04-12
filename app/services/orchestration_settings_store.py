@@ -10,13 +10,20 @@ from typing import Literal
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 
-AGENT_SYSTEMS = ("cloud_code", "codex", "local_model", "custom")
+AGENT_SYSTEMS = ("claude_code", "codex", "local_model", "custom")
 
 
 class AgentSelectionSettings(BaseModel):
-    agent_system: Literal["cloud_code", "codex", "local_model", "custom"] = "codex"
+    agent_system: Literal["claude_code", "cloud_code", "codex", "local_model", "custom"] = "codex"
     agent_name: str | None = None
     notes: str | None = None
+
+    @field_validator("agent_system", mode="before")
+    @classmethod
+    def normalize_agent_system(cls, value: str) -> str:
+        if value == "cloud_code":
+            return "claude_code"
+        return value
 
 
 class LocalModelSettings(BaseModel):
@@ -45,7 +52,7 @@ class LocalModelSettings(BaseModel):
 
 
 class ExecutionSettings(BaseModel):
-    max_parallel_tasks: int = Field(default=4, ge=1, le=32)
+    max_parallel_tasks: int = Field(default=1, ge=1, le=32)
 
 
 class OrchestrationSettings(BaseModel):

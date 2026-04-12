@@ -115,6 +115,28 @@ def create_app() -> FastAPI:
             },
         )
 
+    @app.get("/projects", response_class=HTMLResponse, tags=["system"])
+    async def projects_overview(request: Request) -> Response:
+        try:
+            projects = ProjectRepository(SupabaseRestClient(settings)).list_projects(include_inactive=True)
+            project_error = ""
+        except SupabaseRestError as exc:
+            projects = []
+            project_error = str(exc)
+        return templates.TemplateResponse(
+            request,
+            "pages/projects.html",
+            {
+                "active": "projects",
+                "system_status": "configured" if settings.supabase_configured else "intervention",
+                "supabase_configured": settings.supabase_configured,
+                "mcp_configured": bool(settings.mcp_server_url),
+                "projects": projects,
+                "project_count": len(projects),
+                "project_error": project_error,
+            },
+        )
+
     @app.post("/projects", tags=["system"])
     async def create_project(request: Request) -> RedirectResponse:
         form = await _read_urlencoded_form(request)
@@ -136,6 +158,20 @@ def create_app() -> FastAPI:
         )
         ProjectRepository(SupabaseRestClient(settings)).create_project(project)
         return RedirectResponse("/projects/new", status_code=303)
+
+    @app.post("/projects/{project_id}/delete", tags=["system"])
+    async def delete_project(project_id: str) -> RedirectResponse:
+        repo = ProjectRepository(SupabaseRestClient(settings))
+        try:
+            project = repo.get_project(project_id)
+            if not project:
+                raise StarletteHTTPException(status_code=404, detail="Project not found")
+            deleted = repo.delete_project(project_id)
+        except SupabaseRestError as exc:
+            raise StarletteHTTPException(status_code=503, detail=str(exc)) from exc
+        if not deleted:
+            raise StarletteHTTPException(status_code=404, detail="Project not found")
+        return RedirectResponse("/projects", status_code=303)
 
     return app
 

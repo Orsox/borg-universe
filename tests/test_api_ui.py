@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from app.core.config import Settings, get_settings
 import app.main as main_module
 import app.api.tasks as tasks_module
+from app.services.orchestration_settings_store import OrchestrationSettings
 from app.main import create_app
 from tests.fakes import FakeSupabaseClient
 
@@ -141,6 +142,73 @@ def test_command_node_creates_python_project(monkeypatch) -> None:
     assert response.headers["location"] == "/projects/new"
 
 
+def test_projects_overview_lists_projects_with_delete_actions(monkeypatch) -> None:
+    fake_client = FakeSupabaseClient(
+        {
+            "projects": [
+                {
+                    "id": "example-1",
+                    "name": "Example 1",
+                    "description": "First project",
+                    "project_type": "python",
+                    "project_directory": r"D:\Workbench\firststart",
+                    "pycharm_mcp_enabled": True,
+                    "pycharm_mcp_stream_url": "http://127.0.0.1:64769/stream",
+                    "active": True,
+                },
+                {
+                    "id": "example-2",
+                    "name": "Example 2",
+                    "description": "Second project",
+                    "project_type": "stm",
+                    "project_directory": r"D:\Workbench\second",
+                    "pycharm_mcp_enabled": False,
+                    "active": False,
+                },
+            ]
+        }
+    )
+    monkeypatch.setattr(main_module, "SupabaseRestClient", lambda _settings: fake_client)
+    client = TestClient(create_app())
+
+    page = client.get("/projects")
+
+    assert page.status_code == 200
+    assert "Project Overview" in page.text
+    assert "Example 1" in page.text
+    assert "Example 2" in page.text
+    assert 'action="/projects/example-1/delete"' in page.text
+    assert 'action="/projects/example-2/delete"' in page.text
+    assert 'href="/projects/new"' in page.text
+    assert 'href="/"' in page.text
+
+
+def test_projects_delete_endpoint_removes_project(monkeypatch) -> None:
+    fake_client = FakeSupabaseClient(
+        {
+            "projects": [
+                {
+                    "id": "example-1",
+                    "name": "Example 1",
+                    "description": "First project",
+                    "project_type": "python",
+                    "project_directory": r"D:\Workbench\firststart",
+                    "pycharm_mcp_enabled": True,
+                    "active": True,
+                }
+            ]
+        }
+    )
+    monkeypatch.setattr(main_module, "SupabaseRestClient", lambda _settings: fake_client)
+    client = TestClient(create_app())
+
+    response = client.post("/projects/example-1/delete", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/projects"
+    assert fake_client.tables["projects"] == []
+
+
 def test_orchestration_page_saves_agent_selection(tmp_path) -> None:
     settings = Settings(
         app_name="Borg Universe",
@@ -165,7 +233,7 @@ def test_orchestration_page_saves_agent_selection(tmp_path) -> None:
 
     response = client.post(
         "/orchestration",
-        data={"agent_system": "cloud_code", "agent_name": "Primary Agent", "notes": "Use cloud system"},
+        data={"agent_system": "claude_code", "agent_name": "Primary Agent", "notes": "Use Claude Code"},
         follow_redirects=False,
     )
 
@@ -175,10 +243,14 @@ def test_orchestration_page_saves_agent_selection(tmp_path) -> None:
     client.app.dependency_overrides.clear()
 
     assert page.status_code == 200
-    assert "Cloud Code" in page.text
+    assert "Claude Code" in page.text
     assert "Primary Agent" in page.text
-    assert "Use cloud system" in page.text
+    assert "Use Claude Code" in page.text
     assert (tmp_path / "config" / "orchestration.json").exists()
+
+
+def test_orchestration_settings_default_parallelism_is_one() -> None:
+    assert OrchestrationSettings().execution.max_parallel_tasks == 1
 
 
 def test_local_model_page_saves_connection_settings(tmp_path) -> None:

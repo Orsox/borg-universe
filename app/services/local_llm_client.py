@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 from urllib.parse import urljoin
 from urllib.error import HTTPError, URLError
@@ -18,11 +19,11 @@ class LocalLlmClient:
         self,
         settings: LocalModelSettings,
         base_url: str | None = None,
-        timeout_seconds: float = 180.0,
+        timeout_seconds: float | None = None,
     ) -> None:
         self.settings = settings
         self.base_url = base_url.rstrip("/") if base_url else None
-        self.timeout_seconds = timeout_seconds
+        self.timeout_seconds = timeout_seconds if timeout_seconds is not None else float(os.getenv("LLM_TIMEOUT_SECONDS", "1800"))
 
     def _url(self, path: str) -> str:
         if self.base_url:
