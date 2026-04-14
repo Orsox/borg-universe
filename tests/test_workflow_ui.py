@@ -16,7 +16,7 @@ def test_task_workflow_page_renders(client, monkeypatch):
         "id": "test-task-123",
         "title": "Test Task",
         "status": "running",
-        "workflow_id": "assimilation-demo"
+        "workflow_id": "borg-assimilation"
     }
     
     mock_repo = MagicMock(spec=TaskRepository)
@@ -49,7 +49,7 @@ def test_task_detail_shows_workflow_link(client, monkeypatch):
         "id": "test-task-123",
         "title": "Test Task",
         "status": "running",
-        "workflow_id": "assimilation-demo"
+        "workflow_id": "borg-assimilation"
     }
     mock_repo = MagicMock(spec=TaskRepository)
     mock_repo.get_task.return_value = mock_task

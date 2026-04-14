@@ -237,19 +237,60 @@
     </div>
 
     <div id="graph-content" class="tab-content active">
+        {% macro render_node(node, node_index, stage_index, task, stages) %}
+            {% set is_active = (task.status == 'running' and stage_index == 1) %} {# Mehr Heuristik: Erster Schritt aktiv wenn running #}
+            {% set is_completed = (task.status == 'done' or (task.status != 'queued' and stage_index < stages|length)) %}
+            
+            <div class="workflow-node {{ 'active' if is_active }} {{ 'completed' if is_completed }} {{ 'inactive' if not is_active and not is_completed }}" 
+                 onclick="this.classList.toggle('expanded')">
+                <div class="node-header">
+                    <span class="node-type">{{ node.role or 'AGENT' }}</span>
+                    <span class="node-status">
+                        {% if is_completed %}✔{% elif is_active %}⏳{% else %}○{% endif %}
+                    </span>
+                </div>
+                <div class="node-name">{{ node.borg_name }}</div>
+                <div class="node-runtime">ID: {{ node.id }}</div>
+                
+                <div class="node-details">
+                    <div class="detail-item">
+                        <div class="detail-label">Agent</div>
+                        <div class="detail-value">{{ node.agent or 'N/A' }}</div>
+                    </div>
+                    {% if node.subagents %}
+                    <div class="detail-item">
+                        <div class="detail-label">Subagents</div>
+                        <div class="detail-value">{{ node.subagents|join(', ') }}</div>
+                    </div>
+                    {% endif %}
+                    {% if node.tasks %}
+                    <div class="detail-item">
+                        <div class="detail-label">Tasks</div>
+                        <div class="detail-value">
+                            {% for t in node.tasks %}
+                                • {{ t.title }}<br>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        {% endmacro %}
+
         <div class="graph-view" id="workflow-graph">
+
             {% if stages %}
                 {% for stage in stages %}
                     {% set stage_loop = loop %}
                     {% if stage.nodes|length > 1 %}
                         <div class="parallel-nodes">
                             {% for node in stage.nodes %}
-                                {{ render_node(node, loop.index, stage_loop.index) }}
+                                {{ render_node(node, loop.index, stage_loop.index, task, stages) }}
                             {% endfor %}
                         </div>
                     {% else %}
                         {% for node in stage.nodes %}
-                            {{ render_node(node, loop.index, stage_loop.index) }}
+                            {{ render_node(node, loop.index, stage_loop.index, task, stages) }}
                         {% endfor %}
                     {% endif %}
                     
@@ -310,46 +351,6 @@
         </div>
     </div>
 </div>
-
-{% macro render_node(node, node_index, stage_index) %}
-    {% set is_active = (task.status == 'running' and stage_index == 1) %} {# Mehr Heuristik: Erster Schritt aktiv wenn running #}
-    {% set is_completed = (task.status == 'done' or (task.status != 'queued' and stage_index < stages|length)) %}
-    
-    <div class="workflow-node {{ 'active' if is_active }} {{ 'completed' if is_completed }} {{ 'inactive' if not is_active and not is_completed }}" 
-         onclick="this.classList.toggle('expanded')">
-        <div class="node-header">
-            <span class="node-type">{{ node.role or 'AGENT' }}</span>
-            <span class="node-status">
-                {% if is_completed %}✔{% elif is_active %}⏳{% else %}○{% endif %}
-            </span>
-        </div>
-        <div class="node-name">{{ node.borg_name }}</div>
-        <div class="node-runtime">ID: {{ node.id }}</div>
-        
-        <div class="node-details">
-            <div class="detail-item">
-                <div class="detail-label">Agent</div>
-                <div class="detail-value">{{ node.agent or 'N/A' }}</div>
-            </div>
-            {% if node.subagents %}
-            <div class="detail-item">
-                <div class="detail-label">Subagents</div>
-                <div class="detail-value">{{ node.subagents|join(', ') }}</div>
-            </div>
-            {% endif %}
-            {% if node.tasks %}
-            <div class="detail-item">
-                <div class="detail-label">Tasks</div>
-                <div class="detail-value">
-                    {% for t in node.tasks %}
-                        • {{ t.title }}<br>
-                    {% endfor %}
-                </div>
-            </div>
-            {% endif %}
-        </div>
-    </div>
-{% endmacro %}
 
 <script>
     function switchTab(tabName) {

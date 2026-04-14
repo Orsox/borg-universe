@@ -1,4 +1,9 @@
+import logging
+import os
 import re
+import shutil
+from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs
 
 from fastapi import FastAPI, Request
@@ -36,21 +41,98 @@ def create_app() -> FastAPI:
     )
     app.include_router(api_router)
 
+    def get_ui_context(client: SupabaseRestClient | None = None) -> dict[str, Any]:
+        """Provides common UI context data like sidebar counts."""
+        if client is None:
+            try:
+                client = SupabaseRestClient(settings)
+            except SupabaseRestError as exc:
+                logging.getLogger("borg_universe").error(f"UI Context: Failed to create client: {exc}")
+                return {
+                    "agent_count": 0, "skill_count": 0, "task_count": 0, "workflow_count": 0,
+                    "system_status": "intervention", "supabase_configured": False, "mcp_configured": False,
+                }
+        
+        try:
+            agent_count = len(BorgRegistryRepository(client, "agents").list_items())
+            skill_count = len(BorgRegistryRepository(client, "skills").list_items())
+            task_count = len(TaskRepository(client).list_tasks())
+            workflow_count = len(WorkflowStore(settings.workflows_root).list_workflows())
+        except Exception as exc:
+            logging.getLogger("borg_universe").error(f"UI Context: Failed to fetch counts: {exc}")
+            agent_count = 0
+            skill_count = 0
+            task_count = 0
+            workflow_count = 0
+        
+        return {
+            "agent_count": agent_count,
+            "skill_count": skill_count,
+            "task_count": task_count,
+            "workflow_count": workflow_count,
+            "system_status": "configured" if settings.supabase_configured else "intervention",
+            "supabase_configured": settings.supabase_configured,
+            "mcp_configured": bool(settings.mcp_server_url),
+        }
+
+    # Export for other routers
+    app.state.get_ui_context = get_ui_context
+
+    @app.on_event("startup")
+    async def startup_event() -> None:
+        logger = logging.getLogger("borg_universe")
+        if settings.supabase_configured:
+            logger.info("Initializing Borg Universe: scanning agents and skills...")
+            try:
+                from app.api.borg import _repo
+                from app.services.borg_scanner import scan_agents, scan_skills
+                client = SupabaseRestClient(settings)
+                
+                # Perform scan
+                agents = scan_agents(settings)
+                skills = scan_skills(settings)
+                
+                agent_repo = _repo("agents", settings)
+                skill_repo = _repo("skills", settings)
+                
+                # Sync with DB
+                synced_agents = agent_repo.sync(agents)
+                synced_skills = skill_repo.sync(skills)
+                
+                # Double check DB state
+                db_agents = agent_repo.list_items()
+                db_skills = skill_repo.list_items()
+                
+                logger.info(f"Borg Universe initialization complete.")
+                logger.info(f"Agents - Found on disk: {len(agents)}, Synced: {len(synced_agents)}, DB Total: {len(db_agents)}")
+                logger.info(f"Skills - Found on disk: {len(skills)}, Synced: {len(synced_skills)}, DB Total: {len(db_skills)}")
+                
+                if len(db_agents) == 0 and len(agents) > 0:
+                    logger.error("CRITICAL: Agents found on disk but DB is empty after sync!")
+                if len(db_skills) == 0 and len(skills) > 0:
+                    logger.error("CRITICAL: Skills found on disk but DB is empty after sync!")
+
+            except Exception as exc:
+                logger.error(f"Failed to initialize Borg Universe during startup: {exc}")
+        else:
+            logger.warning("Supabase not configured, skipping Borg Universe initialization.")
+
     @app.exception_handler(StarletteHTTPException)
     async def render_html_exception(request: Request, exc: StarletteHTTPException) -> Response:
         if request.url.path.startswith("/api") or request.url.path in {"/health", "/docs", "/openapi.json"}:
             return await http_exception_handler(request, exc)
 
+        ctx = get_ui_context()
+        ctx.update({
+            "active": "",
+            "title": "Node not ready",
+            "status_code": exc.status_code,
+            "detail": exc.detail,
+        })
         return templates.TemplateResponse(
             request,
             "pages/error.html",
-            {
-                "active": "",
-                "title": "Node not ready",
-                "status_code": exc.status_code,
-                "detail": exc.detail,
-                "system_status": "intervention",
-            },
+            ctx,
             status_code=exc.status_code,
         )
 
@@ -60,16 +142,18 @@ def create_app() -> FastAPI:
             orchestration = OrchestrationSettingsStore(settings.borg_root).load()
         except RuntimeError:
             orchestration = None
+        
+        client = SupabaseRestClient(settings)
         projects: list[dict] = []
         tasks: list[dict] = []
         project_error = ""
         task_error = ""
         try:
-            projects = ProjectRepository(SupabaseRestClient(settings)).list_projects()
+            projects = ProjectRepository(client).list_projects()
         except SupabaseRestError as exc:
             project_error = str(exc)
         try:
-            tasks = TaskRepository(SupabaseRestClient(settings)).list_tasks()
+            tasks = TaskRepository(client).list_tasks()
         except SupabaseRestError as exc:
             task_error = str(exc)
 
@@ -77,60 +161,53 @@ def create_app() -> FastAPI:
         active_task_count = sum(1 for task in tasks if task.get("status") == "running")
         needs_input_tasks = _ordered_attention_tasks(tasks, "needs_input")
         review_tasks = [task for task in tasks if task.get("status") == "review_required"][:5]
-        return templates.TemplateResponse(
-            request,
-            "pages/home.html",
-            {
-                "active": "home",
-                "system_status": "configured" if settings.supabase_configured else "intervention",
-                "supabase_configured": settings.supabase_configured,
-                "mcp_configured": bool(settings.mcp_server_url),
-                "agents_root_name": settings.agents_root.name,
-                "skills_root_name": settings.skills_root.name,
-                "environment": settings.environment,
-                "app_version": settings.app_version,
-                "projects": projects,
-                "project_count": len(projects),
-                "processed_task_count": processed_task_count,
-                "active_task_count": active_task_count,
-                "needs_input_count": len(needs_input_tasks),
-                "current_input_task": needs_input_tasks[0] if needs_input_tasks else None,
-                "next_input_tasks": needs_input_tasks[1:5],
-                "review_required_count": len(review_tasks),
-                "review_tasks": review_tasks,
-                "task_error": task_error,
-                "project_types": PROJECT_TYPES,
-                "project_error": project_error,
-                "auto_refresh_seconds": 10,
-                "agent_system": (
-                    orchestration.agent_selection.agent_system.replace("_", " ").title()
-                    if orchestration
-                    else "Not set"
-                ),
-                "local_model_endpoint": (
-                    f"{orchestration.local_model.ip_address}:{orchestration.local_model.port}"
-                    if orchestration
-                    else "Not set"
-                ),
-            },
-        )
+
+        ctx = get_ui_context(client)
+        ctx.update({
+            "active": "home",
+            "agents_root_name": settings.agents_root.name,
+            "skills_root_name": settings.skills_root.name,
+            "environment": settings.environment,
+            "app_version": settings.app_version,
+            "projects": projects,
+            "project_count": len(projects),
+            "processed_task_count": processed_task_count,
+            "active_task_count": active_task_count,
+            "needs_input_count": len(needs_input_tasks),
+            "current_input_task": needs_input_tasks[0] if needs_input_tasks else None,
+            "next_input_tasks": needs_input_tasks[1:5],
+            "review_required_count": len(review_tasks),
+            "review_tasks": review_tasks,
+            "task_error": task_error,
+            "project_types": PROJECT_TYPES,
+            "project_error": project_error,
+            "auto_refresh_seconds": 10,
+            "agent_system": (
+                orchestration.agent_selection.agent_system.replace("_", " ").title()
+                if orchestration
+                else "Not set"
+            ),
+            "local_model_endpoint": (
+                f"{orchestration.local_model.ip_address}:{orchestration.local_model.port}"
+                if orchestration
+                else "Not set"
+            ),
+        })
+
+        return templates.TemplateResponse(request, "pages/home.html", ctx)
 
     @app.get("/projects/new", response_class=HTMLResponse, tags=["system"])
     async def new_project(request: Request) -> Response:
-        return templates.TemplateResponse(
-            request,
-            "pages/projects_new.html",
-            {
-                "active": "home",
-                "system_status": "configured" if settings.supabase_configured else "intervention",
-                "supabase_configured": settings.supabase_configured,
-                "mcp_configured": bool(settings.mcp_server_url),
-                "project_types": PROJECT_TYPES,
-            },
-        )
+        ctx = get_ui_context()
+        ctx.update({
+            "active": "home",
+            "project_types": PROJECT_TYPES,
+        })
+        return templates.TemplateResponse(request, "pages/projects_new.html", ctx)
 
     @app.get("/projects", response_class=HTMLResponse, tags=["system"])
     async def projects_overview(request: Request) -> Response:
+        logger = logging.getLogger("borg_universe")
         client = SupabaseRestClient(settings)
         try:
             projects = ProjectRepository(client).list_projects(include_inactive=True)
@@ -140,36 +217,86 @@ def create_app() -> FastAPI:
             project_error = str(exc)
 
         try:
+            # We explicitly fetch the items that are currently in the registry
             agents = BorgRegistryRepository(client, "agents").list_items()
             skills = BorgRegistryRepository(client, "skills").list_items()
             
-            # Fetch existing bindings
+            logger.info(f"Projects Overview: Loaded {len(agents)} agents and {len(skills)} skills from DB.")
+            
+            # If DB is empty but we have files, this might be a fresh start or sync issue
+            if not agents or not skills:
+                from app.services.borg_scanner import scan_agents, scan_skills
+                if not agents:
+                    disk_agents = scan_agents(settings)
+                    if disk_agents:
+                        logger.warning(f"DB agents empty, but {len(disk_agents)} found on disk. Syncing...")
+                        BorgRegistryRepository(client, "agents").sync(disk_agents)
+                        agents = BorgRegistryRepository(client, "agents").list_items()
+                if not skills:
+                    disk_skills = scan_skills(settings)
+                    if disk_skills:
+                        logger.warning(f"DB skills empty, but {len(disk_skills)} found on disk. Syncing...")
+                        BorgRegistryRepository(client, "skills").sync(disk_skills)
+                        skills = BorgRegistryRepository(client, "skills").list_items()
+            
+            # Fetch existing bindings and local .claude state
             binding_repo = ProjectRegistryBindingRepository(client)
-            all_bindings = []
-            for p in projects:
-                p["bindings"] = binding_repo.list_for_project(p["id"])
-        except SupabaseRestError:
-            agents = []
-            skills = []
+            bindings_available = True
+            try:
+                for p in projects:
+                    p["bindings"] = binding_repo.list_for_project(p["id"])
+                    p["bound_agents"] = [b["unit_name"] for b in p["bindings"] if b["unit_type"] == "agent"]
+                    p["bound_skills"] = [b["unit_name"] for b in p["bindings"] if b["unit_type"] == "skill"]
+            except SupabaseRestError as exc:
+                if _is_missing_project_registry_bindings_table(exc):
+                    logger.warning("project_registry_bindings table is missing. Continuing without stored bindings.")
+                    bindings_available = False
+                else:
+                    raise
 
-        return templates.TemplateResponse(
-            request,
-            "pages/projects.html",
-            {
-                "active": "projects",
-                "system_status": "configured" if settings.supabase_configured else "intervention",
-                "supabase_configured": settings.supabase_configured,
-                "mcp_configured": bool(settings.mcp_server_url),
-                "projects": projects,
-                "project_count": len(projects),
-                "project_error": project_error,
-                "agents": agents,
-                "skills": skills,
-            },
-        )
+            for p in projects:
+                if not bindings_available:
+                    p["bindings"] = []
+                    p["bound_agents"] = []
+                    p["bound_skills"] = []
+
+                # Check local .claude state
+                p["local_agents"] = []
+                p["local_skills"] = []
+                project_dir = p.get("project_directory", "").strip()
+                if project_dir:
+                    runtime_root = _resolve_project_runtime_root(project_dir)
+                    claude_dir = runtime_root / ".claude" if runtime_root is not None else Path(project_dir).absolute() / ".claude"
+                    agents_dir = claude_dir / "agents"
+                    skills_dir = claude_dir / "skills"
+                    if agents_dir.is_dir():
+                        p["local_agents"] = [f.stem for f in agents_dir.glob("*.md")]
+                    if skills_dir.is_dir():
+                        p["local_skills"] = [
+                            d.name for d in skills_dir.iterdir()
+                            if d.is_dir() and (d / "SKILL.md").is_file()
+                        ]
+        except SupabaseRestError as exc:
+            logger.error(f"Error loading registry items for projects: {exc}")
+            # If DB fetch fails, we try to fall back to an empty list rather than erroring out the whole page
+            agents = agents if 'agents' in locals() else []
+            skills = skills if 'skills' in locals() else []
+
+        ctx = get_ui_context(client)
+        ctx.update({
+            "active": "projects",
+            "projects": projects,
+            "project_count": len(projects),
+            "project_error": project_error,
+            "agents": agents,
+            "skills": skills,
+        })
+
+        return templates.TemplateResponse(request, "pages/projects.html", ctx)
 
     @app.get("/projects/import", response_class=HTMLResponse, tags=["system"])
     async def import_projects_page(request: Request) -> Response:
+        ctx = get_ui_context()
         scanned = scan_drive_for_projects(settings.workbench_root)
         try:
             existing = ProjectRepository(SupabaseRestClient(settings)).list_projects(include_inactive=True)
@@ -180,18 +307,12 @@ def create_app() -> FastAPI:
         # Filter out already imported projects
         available = [p for p in scanned if p["id"] not in existing_ids]
 
-        return templates.TemplateResponse(
-            request,
-            "pages/projects_import.html",
-            {
-                "active": "projects",
-                "system_status": "configured" if settings.supabase_configured else "intervention",
-                "supabase_configured": settings.supabase_configured,
-                "mcp_configured": bool(settings.mcp_server_url),
-                "projects": available,
-                "workbench_path": str(settings.workbench_root),
-            },
-        )
+        ctx.update({
+            "active": "projects",
+            "projects": available,
+            "workbench_path": str(settings.workbench_root),
+        })
+        return templates.TemplateResponse(request, "pages/projects_import.html", ctx)
 
     @app.post("/projects/import", tags=["system"])
     async def do_import_projects(request: Request) -> RedirectResponse:
@@ -222,6 +343,7 @@ def create_app() -> FastAPI:
 
     @app.get("/projects/import/tasks", response_class=HTMLResponse, tags=["system"])
     async def import_tasks_page(request: Request) -> Response:
+        ctx = get_ui_context()
         project_ids = request.query_params.get("project_ids", "").split(",")
         project_ids = [pid for pid in project_ids if pid]
         
@@ -235,18 +357,12 @@ def create_app() -> FastAPI:
         workflow_store = WorkflowStore(settings.workflows_root)
         workflows = workflow_store.list_workflows()
         
-        return templates.TemplateResponse(
-            request,
-            "pages/projects_import_tasks.html",
-            {
-                "active": "projects",
-                "system_status": "configured" if settings.supabase_configured else "intervention",
-                "supabase_configured": settings.supabase_configured,
-                "mcp_configured": bool(settings.mcp_server_url),
-                "projects": projects,
-                "workflows": workflows,
-            },
-        )
+        ctx.update({
+            "active": "projects",
+            "projects": projects,
+            "workflows": workflows,
+        })
+        return templates.TemplateResponse(request, "pages/projects_import_tasks.html", ctx)
 
     @app.post("/projects/import/tasks", tags=["system"])
     async def do_import_tasks(request: Request) -> RedirectResponse:
@@ -320,16 +436,103 @@ def create_app() -> FastAPI:
             
         client = SupabaseRestClient(settings)
         repo = ProjectRegistryBindingRepository(client)
+        project_repo = ProjectRepository(client)
         
         try:
-            # We could clear old bindings or just add new ones. 
-            # The UI implies we select what we want to bind.
-            # To be simple: we ADD them. If we want to replace, we'd need unbind_all first.
-            # Given the prompt "alle oder nur einzelne anzuwählen", 
-            # it might mean "bind these selected ones".
-            repo.bind_units(project_id, units)
+            repo.unbind_all(project_id)
+            if units:
+                repo.bind_units(project_id, units)
         except SupabaseRestError as exc:
-            print(f"Error binding units: {exc}")
+            if _is_missing_project_registry_bindings_table(exc):
+                logging.getLogger("borg_universe").warning(
+                    "project_registry_bindings table is missing. Continuing with filesystem copy only."
+                )
+            else:
+                logging.getLogger("borg_universe").error(f"Error binding units: {exc}")
+                return RedirectResponse("/projects", status_code=303)
+
+        try:
+            project = project_repo.get_project(project_id)
+            if project:
+                project_dir = project.get("project_directory", "").strip()
+                if not project_dir:
+                    logging.getLogger("borg_universe").warning(f"Project {project_id} has no project_directory set. Skipping copy to .claude.")
+                else:
+                    base_path = _resolve_project_runtime_root(project_dir)
+                    if base_path is None:
+                        raise RuntimeError(
+                            "Project directory is not accessible from the running service. "
+                            "Check WORKBENCH_HOST_ROOT / WORKBENCH_CONTAINER_ROOT and the Docker volume mount."
+                        )
+                    logging.getLogger("borg_universe").info(f"Base path for .claude: {base_path}")
+                    claude_dir = base_path / ".claude"
+
+                    # Keep the layout compatible with Claude Code project-local assets.
+                    agents_dir = claude_dir / "agents"
+                    skills_dir = claude_dir / "skills"
+                    agents_dir.mkdir(parents=True, exist_ok=True)
+                    skills_dir.mkdir(parents=True, exist_ok=True)
+                    logging.getLogger("borg_universe").info(f"Target .claude directory: {claude_dir}")
+
+                    # Copy agents
+                    for name in agent_names:
+                        source_file = settings.agents_root.absolute() / f"{name}.md"
+                        logging.getLogger("borg_universe").info(f"Trying to copy agent {name} from {source_file}")
+                        if source_file.exists():
+                            target_file = agents_dir / f"{name}.md"
+                            shutil.copy2(source_file, target_file)
+                            logging.getLogger("borg_universe").info(f"Copied agent {name} to {target_file}")
+                        else:
+                            fallback_file = (settings.borg_root / "agents").absolute() / f"{name}.md"
+                            logging.getLogger("borg_universe").info(f"Trying fallback for agent {name}: {fallback_file}")
+                            if fallback_file.exists():
+                                 target_file = agents_dir / f"{name}.md"
+                                 shutil.copy2(fallback_file, target_file)
+                                 logging.getLogger("borg_universe").info(f"Copied agent {name} from BORG fallback to {target_file}")
+                            else:
+                                 found = False
+                                 for root_dir in [settings.agents_root, settings.borg_root / "agents"]:
+                                     if not root_dir.exists(): continue
+                                     matches = list(root_dir.glob(f"**/{name}.md"))
+                                     if matches:
+                                         shutil.copy2(matches[0], agents_dir / f"{name}.md")
+                                         logging.getLogger("borg_universe").info(f"Copied agent {name} from deep search: {matches[0]}")
+                                         found = True
+                                         break
+                                 if not found:
+                                     logging.getLogger("borg_universe").warning(f"Agent source file {source_file} not found (tried fallbacks too)")
+
+                    # Copy skills
+                    for name in skill_names:
+                        source_skill_dir = settings.skills_root.absolute() / name
+                        logging.getLogger("borg_universe").info(f"Trying to copy skill {name} from {source_skill_dir}")
+                        if not (source_skill_dir.exists() and source_skill_dir.is_dir()):
+                            source_skill_dir = (settings.borg_root / "skills").absolute() / name
+                            logging.getLogger("borg_universe").info(f"Trying fallback for skill {name}: {source_skill_dir}")
+
+                        if source_skill_dir.exists() and source_skill_dir.is_dir():
+                            target_skill_dir = skills_dir / name
+                            if target_skill_dir.exists():
+                                shutil.rmtree(target_skill_dir)
+                            shutil.copytree(source_skill_dir, target_skill_dir)
+                            logging.getLogger("borg_universe").info(f"Copied skill {name} to {target_skill_dir}")
+                        else:
+                            found = False
+                            for root_dir in [settings.skills_root, settings.borg_root / "skills"]:
+                                if not root_dir.exists(): continue
+                                matches = [d for d in root_dir.glob(f"**/{name}") if d.is_dir()]
+                                if matches:
+                                    target_skill_dir = skills_dir / name
+                                    if target_skill_dir.exists():
+                                        shutil.rmtree(target_skill_dir)
+                                    shutil.copytree(matches[0], target_skill_dir)
+                                    logging.getLogger("borg_universe").info(f"Copied skill {name} from deep search: {matches[0]}")
+                                    found = True
+                                    break
+                            if not found:
+                                logging.getLogger("borg_universe").warning(f"Skill source directory for {name} not found in any location")
+        except Exception as exc:
+            logging.getLogger("borg_universe").error(f"Unexpected error during bind and copy: {exc}")
             
         return RedirectResponse("/projects", status_code=303)
 
@@ -390,6 +593,68 @@ def _optional(value: str | None) -> str | None:
         return None
     value = value.strip()
     return value or None
+
+
+def _resolve_project_runtime_root(project_directory: str) -> Path | None:
+    text = project_directory.strip()
+    if not text:
+        return None
+
+    mapped = _map_workbench_path(text)
+    if mapped is not None:
+        return mapped
+
+    try:
+        candidate = Path(text).expanduser()
+    except Exception:
+        return None
+    return candidate if candidate.exists() else None
+
+
+def _map_workbench_path(host_path: str) -> Path | None:
+    normalized_host = host_path.replace("\\", "/").rstrip("/")
+    if not normalized_host:
+        return None
+
+    host_root = os.getenv("WORKBENCH_HOST_ROOT", r"D:\Workbench").replace("\\", "/").rstrip("/")
+    container_root = os.getenv("WORKBENCH_CONTAINER_ROOT", str(get_settings().workbench_root)).replace("\\", "/").rstrip("/")
+
+    if normalized_host.lower() == host_root.lower():
+        return Path(container_root)
+
+    prefix = host_root + "/"
+    if normalized_host.lower().startswith(prefix.lower()):
+        suffix = normalized_host[len(host_root) + 1 :]
+        return Path(f"{container_root}/{suffix}") if suffix else Path(container_root)
+
+    inferred = _infer_workbench_container_path(normalized_host, container_root)
+    if inferred is not None:
+        return inferred
+
+    if normalized_host.startswith("/"):
+        absolute = Path(normalized_host)
+        return absolute if absolute.exists() else None
+
+    return None
+
+
+def _infer_workbench_container_path(normalized_host: str, container_root: str) -> Path | None:
+    marker = "/workbench/"
+    lowered = normalized_host.lower()
+    idx = lowered.find(marker)
+    if idx != -1:
+        suffix = normalized_host[idx + len(marker) :]
+        return Path(f"{container_root}/{suffix}") if suffix else Path(container_root)
+
+    if lowered.endswith("/workbench"):
+        return Path(container_root)
+
+    return None
+
+
+def _is_missing_project_registry_bindings_table(exc: SupabaseRestError) -> bool:
+    text = str(exc)
+    return exc.status_code == 404 or "42P01" in text or "project_registry_bindings" in text
 
 
 def _ordered_attention_tasks(tasks: list[dict], status_value: str) -> list[dict]:

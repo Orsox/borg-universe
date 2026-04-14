@@ -231,6 +231,244 @@ def test_projects_overview_lists_projects_with_delete_actions(monkeypatch) -> No
     assert 'href="/"' in page.text
 
 
+def test_projects_overview_detects_nested_claude_assets(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "ir-sensor"
+    (project_dir / ".claude" / "agents").mkdir(parents=True)
+    (project_dir / ".claude" / "skills" / "borg-collective").mkdir(parents=True)
+    (project_dir / ".claude" / "agents" / "borg-queen-architect.md").write_text("# agent\n", encoding="utf-8")
+    (project_dir / ".claude" / "skills" / "borg-collective" / "SKILL.md").write_text("# skill\n", encoding="utf-8")
+
+    fake_client = FakeSupabaseClient(
+        {
+            "projects": [
+                {
+                    "id": "ir-sensor",
+                    "name": "IR Sensor",
+                    "description": "Embedded project",
+                    "project_type": "stm",
+                    "project_directory": str(project_dir),
+                    "active": True,
+                }
+            ],
+            "agents": [{"name": "borg-queen-architect", "enabled": True, "path": "agents/borg-queen-architect.md"}],
+            "skills": [{"name": "borg-collective", "enabled": True, "path": "skills/borg-collective/SKILL.md"}],
+            "project_registry_bindings": [],
+            "tasks": [],
+        }
+    )
+    monkeypatch.setattr(main_module, "SupabaseRestClient", lambda _settings: fake_client)
+    client = TestClient(create_app())
+
+    page = client.get("/projects")
+
+    assert page.status_code == 200
+    assert page.text.count('title="Present in .claude"') == 2
+
+
+def test_bind_project_copies_selected_agents_and_skills_into_nested_claude_dirs(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "ir-sensor"
+    project_dir.mkdir()
+    agents_root = tmp_path / "agents"
+    skills_root = tmp_path / "skills"
+    borg_root = tmp_path / "BORG"
+    agents_root.mkdir()
+    skills_root.mkdir()
+    (borg_root / "agents").mkdir(parents=True)
+    (borg_root / "skills").mkdir(parents=True)
+    (agents_root / "borg-queen-architect.md").write_text("# agent\n", encoding="utf-8")
+    skill_dir = skills_root / "borg-collective"
+    (skill_dir / "references").mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# skill\n", encoding="utf-8")
+    (skill_dir / "references" / "example.md").write_text("reference\n", encoding="utf-8")
+
+    fake_client = FakeSupabaseClient(
+        {
+            "projects": [
+                {
+                    "id": "ir-sensor",
+                    "name": "IR Sensor",
+                    "description": "Embedded project",
+                    "project_type": "stm",
+                    "project_directory": str(project_dir),
+                    "active": True,
+                }
+            ],
+            "project_registry_bindings": [],
+            "tasks": [],
+        }
+    )
+    settings = Settings(
+        app_name="Borg Universe",
+        app_version="0.1.0",
+        environment="test",
+        debug=False,
+        log_level="INFO",
+        borg_root=borg_root,
+        agents_root=agents_root,
+        skills_root=skills_root,
+        workflows_root=tmp_path,
+        artifact_root=tmp_path,
+        supabase_url=None,
+        supabase_anon_key=None,
+        supabase_service_role_key=None,
+        mcp_server_url=None,
+        worker_poll_interval_seconds=1.0,
+        worker_batch_size=1,
+    )
+    monkeypatch.setattr(main_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(main_module, "SupabaseRestClient", lambda _settings: fake_client)
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/projects/ir-sensor/bind",
+        data={"agent_names": ["borg-queen-architect"], "skill_names": ["borg-collective"]},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/projects"
+    assert (project_dir / ".claude" / "agents" / "borg-queen-architect.md").exists()
+    assert (project_dir / ".claude" / "skills" / "borg-collective" / "SKILL.md").exists()
+    assert (project_dir / ".claude" / "skills" / "borg-collective" / "references" / "example.md").exists()
+
+
+def test_bind_project_maps_host_project_path_into_workbench_mount(monkeypatch, tmp_path: Path) -> None:
+    host_root = tmp_path / "host-workbench"
+    container_root = tmp_path / "container-workbench"
+    project_dir = container_root / "ir-sensor"
+    project_dir.mkdir(parents=True)
+    agents_root = tmp_path / "agents"
+    skills_root = tmp_path / "skills"
+    borg_root = tmp_path / "BORG"
+    agents_root.mkdir()
+    skills_root.mkdir()
+    (borg_root / "agents").mkdir(parents=True)
+    (borg_root / "skills").mkdir(parents=True)
+    (agents_root / "borg-queen-architect.md").write_text("# agent\n", encoding="utf-8")
+    skill_dir = skills_root / "borg-collective"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# skill\n", encoding="utf-8")
+
+    fake_client = FakeSupabaseClient(
+        {
+            "projects": [
+                {
+                    "id": "ir-sensor",
+                    "name": "IR Sensor",
+                    "description": "Embedded project",
+                    "project_type": "stm",
+                    "project_directory": str(host_root / "ir-sensor"),
+                    "active": True,
+                }
+            ],
+            "project_registry_bindings": [],
+            "tasks": [],
+        }
+    )
+    settings = Settings(
+        app_name="Borg Universe",
+        app_version="0.1.0",
+        environment="test",
+        debug=False,
+        log_level="INFO",
+        borg_root=borg_root,
+        agents_root=agents_root,
+        skills_root=skills_root,
+        workflows_root=tmp_path,
+        artifact_root=tmp_path,
+        workbench_root=container_root,
+        supabase_url=None,
+        supabase_anon_key=None,
+        supabase_service_role_key=None,
+        mcp_server_url=None,
+        worker_poll_interval_seconds=1.0,
+        worker_batch_size=1,
+    )
+    monkeypatch.setattr(main_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(main_module, "SupabaseRestClient", lambda _settings: fake_client)
+    monkeypatch.setenv("WORKBENCH_HOST_ROOT", str(host_root))
+    monkeypatch.setenv("WORKBENCH_CONTAINER_ROOT", str(container_root))
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/projects/ir-sensor/bind",
+        data={"agent_names": ["borg-queen-architect"], "skill_names": ["borg-collective"]},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert (project_dir / ".claude" / "agents" / "borg-queen-architect.md").exists()
+    assert (project_dir / ".claude" / "skills" / "borg-collective" / "SKILL.md").exists()
+
+
+def test_bind_project_infers_linux_workbench_path_without_env_override(monkeypatch, tmp_path: Path) -> None:
+    container_root = tmp_path / "container-workbench"
+    project_dir = container_root / "Parken" / "parksensor-irv4"
+    project_dir.mkdir(parents=True)
+    agents_root = tmp_path / "agents"
+    skills_root = tmp_path / "skills"
+    borg_root = tmp_path / "BORG"
+    agents_root.mkdir()
+    skills_root.mkdir()
+    (borg_root / "agents").mkdir(parents=True)
+    (borg_root / "skills").mkdir(parents=True)
+    (agents_root / "borg-queen-architect.md").write_text("# agent\n", encoding="utf-8")
+    skill_dir = skills_root / "borg-collective"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# skill\n", encoding="utf-8")
+
+    fake_client = FakeSupabaseClient(
+        {
+            "projects": [
+                {
+                    "id": "parksensor-irv4",
+                    "name": "Parksensor IR V4",
+                    "description": "Embedded project",
+                    "project_type": "stm",
+                    "project_directory": "/home/berndborgwerth/Workbench/Parken/parksensor-irv4",
+                    "active": True,
+                }
+            ],
+            "project_registry_bindings": [],
+            "tasks": [],
+        }
+    )
+    settings = Settings(
+        app_name="Borg Universe",
+        app_version="0.1.0",
+        environment="test",
+        debug=False,
+        log_level="INFO",
+        borg_root=borg_root,
+        agents_root=agents_root,
+        skills_root=skills_root,
+        workflows_root=tmp_path,
+        artifact_root=tmp_path,
+        workbench_root=container_root,
+        supabase_url=None,
+        supabase_anon_key=None,
+        supabase_service_role_key=None,
+        mcp_server_url=None,
+        worker_poll_interval_seconds=1.0,
+        worker_batch_size=1,
+    )
+    monkeypatch.setattr(main_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(main_module, "SupabaseRestClient", lambda _settings: fake_client)
+    monkeypatch.delenv("WORKBENCH_HOST_ROOT", raising=False)
+    monkeypatch.delenv("WORKBENCH_CONTAINER_ROOT", raising=False)
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/projects/parksensor-irv4/bind",
+        data={"agent_names": ["borg-queen-architect"], "skill_names": ["borg-collective"]},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert (project_dir / ".claude" / "agents" / "borg-queen-architect.md").exists()
+    assert (project_dir / ".claude" / "skills" / "borg-collective" / "SKILL.md").exists()
+
+
 def test_projects_delete_endpoint_removes_project(monkeypatch) -> None:
     fake_client = FakeSupabaseClient(
         {
@@ -552,9 +790,9 @@ def test_workflows_api_returns_yaml_workflow() -> None:
 
     assert response.status_code == 200
     workflows = response.json()
-    assert workflows[0]["id"] == "assimilation-demo"
+    assert workflows[0]["id"] == "borg-assimilation"
     assert workflows[0]["entry_node"] == "spec-assimilator"
-    assert {workflow["id"] for workflow in workflows} >= {"assimilation-demo", "new_borg_cube_project"}
+    assert {workflow["id"] for workflow in workflows} >= {"borg-assimilation", "new_borg_cube_project"}
     new_cube = next(workflow for workflow in workflows if workflow["id"] == "new_borg_cube_project")
     assert [step["id"] for step in new_cube["steps"]] == [
         "specification-phase",

@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.core.config import Settings, get_settings
-from app.db.repositories import ArtifactRepository, McpAuditRepository, ProjectRepository, TaskRepository
+from app.db.repositories import ArtifactRepository, BorgRegistryRepository, McpAuditRepository, ProjectRepository, TaskRepository
 from app.db.supabase_client import SupabaseRestClient, SupabaseRestError
 from app.models.tasks import TASK_STATUSES, TaskCreate, TaskStatusUpdate
 from app.services.workflow_store import WorkflowStore, WorkflowStoreError
@@ -130,9 +130,13 @@ async def tasks_dashboard(
     project_repo: Annotated[ProjectRepository, Depends(get_project_repository)],
     workflow_store: Annotated[WorkflowStore, Depends(get_workflow_store)],
 ) -> HTMLResponse:
+    settings = get_settings()
     try:
+        client = SupabaseRestClient(settings)
         tasks = repo.list_tasks()
-    except SupabaseRestError as exc:
+        agents = BorgRegistryRepository(client, "agents").list_items()
+        skills = BorgRegistryRepository(client, "skills").list_items()
+    except Exception as exc:
         return HTMLResponse(str(exc), status_code=503)
 
     try:
@@ -169,6 +173,12 @@ async def tasks_dashboard(
             "workflow_labels": workflow_labels,
             "metrics": metrics,
             "task_count": len(tasks),
+            "agent_count": len(agents),
+            "skill_count": len(skills),
+            "workflow_count": len(workflows),
+            "system_status": "configured" if settings.supabase_configured else "intervention",
+            "supabase_configured": settings.supabase_configured,
+            "mcp_configured": bool(settings.mcp_server_url),
             "empty_title": "No tasks yet",
             "empty_message": "Create the first task to start the worker flow.",
         },
@@ -224,13 +234,18 @@ async def task_detail(
     project_repo: Annotated[ProjectRepository, Depends(get_project_repository)],
     workflow_store: Annotated[WorkflowStore, Depends(get_workflow_store)],
 ) -> HTMLResponse:
+    settings = get_settings()
     try:
+        client = SupabaseRestClient(settings)
         task = repo.get_task(task_id)
         if not task:
             return HTMLResponse("Task not found", status_code=404)
         events = repo.list_events(task_id)
         artifacts = artifact_repo.list_for_task(task_id)
-    except SupabaseRestError as exc:
+        agents = BorgRegistryRepository(client, "agents").list_items()
+        skills = BorgRegistryRepository(client, "skills").list_items()
+        tasks_list = repo.list_tasks()
+    except Exception as exc:
         return HTMLResponse(str(exc), status_code=503)
 
     try:
@@ -257,7 +272,13 @@ async def task_detail(
             "project_labels": project_labels,
             "workflow_labels": workflow_labels,
             "statuses": TASK_STATUSES,
-            "task_count": 1,
+            "task_count": len(tasks_list),
+            "agent_count": len(agents),
+            "skill_count": len(skills),
+            "workflow_count": len(workflows),
+            "system_status": "configured" if settings.supabase_configured else "intervention",
+            "supabase_configured": settings.supabase_configured,
+            "mcp_configured": bool(settings.mcp_server_url),
             "detail_fields": [
                 ("Project", "project_id"),
                 ("Workflow", "workflow_id"),
@@ -277,12 +298,20 @@ async def task_detail(
     )
 
 
+def get_mcp_audit_repository(settings: Annotated[Settings, Depends(get_settings)]) -> McpAuditRepository:
+    try:
+        return McpAuditRepository(SupabaseRestClient(settings))
+    except SupabaseRestError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+
 @router.get("/tasks/{task_id}/workflow", response_class=HTMLResponse)
 async def task_workflow(
     task_id: str,
     request: Request,
     repo: Annotated[TaskRepository, Depends(get_task_repository)],
     workflow_store: Annotated[WorkflowStore, Depends(get_workflow_store)],
+    mcp_repo: Annotated[McpAuditRepository, Depends(get_mcp_audit_repository)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> HTMLResponse:
     try:
@@ -290,9 +319,15 @@ async def task_workflow(
         if not task:
             return HTMLResponse("Task not found", status_code=404)
         events = repo.list_events(task_id)
-        logs = McpAuditRepository(_client(settings)).list_logs({"task_id": task_id})
+        logs = mcp_repo.list_logs({"task_id": task_id})
     except SupabaseRestError as exc:
         return HTMLResponse(str(exc), status_code=503)
+    except Exception as exc:
+        # Log unexpected errors to help debugging
+        print(f"Error in task_workflow: {exc}")
+        import traceback
+        traceback.print_exc()
+        return HTMLResponse(f"Internal Server Error: {str(exc)}", status_code=500)
 
     workflow = None
     stages = []
@@ -331,13 +366,19 @@ async def review_task(
     project_repo: Annotated[ProjectRepository, Depends(get_project_repository)],
     workflow_store: Annotated[WorkflowStore, Depends(get_workflow_store)],
 ) -> HTMLResponse:
+    settings = get_settings()
     try:
+        client = SupabaseRestClient(settings)
         task = repo.get_task(task_id)
         if not task:
             return HTMLResponse("Task not found", status_code=404)
         events = repo.list_events(task_id)
         artifacts = artifact_repo.list_for_task(task_id)
-    except SupabaseRestError as exc:
+        agents = BorgRegistryRepository(client, "agents").list_items()
+        skills = BorgRegistryRepository(client, "skills").list_items()
+        tasks_list = repo.list_tasks()
+        workflow_count = len(workflow_store.list_workflows())
+    except Exception as exc:
         return HTMLResponse(str(exc), status_code=503)
 
     try:
@@ -372,6 +413,13 @@ async def review_task(
             "project_labels": project_labels,
             "workflow_labels": workflow_labels,
             "statuses": TASK_STATUSES,
+            "task_count": len(tasks_list),
+            "agent_count": len(agents),
+            "skill_count": len(skills),
+            "workflow_count": workflow_count,
+            "system_status": "configured" if settings.supabase_configured else "intervention",
+            "supabase_configured": settings.supabase_configured,
+            "mcp_configured": bool(settings.mcp_server_url),
             "review_actions": [
                 {"value": "save", "label": "Save review"},
                 {"value": "confirm", "label": "Confirm and continue"},

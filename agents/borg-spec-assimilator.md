@@ -1,6 +1,6 @@
 ---
 name: borg-spec-assimilator
-description: "Use this agent when the user needs to create or update borg-cube.md specification files by analyzing an existing codebase. Typical scenarios include: scanning a project to generate a root borg-cube.md and module borg-cube.md files, updating specs to match current implementation, and documenting module boundaries without changing code. Examples:\\n<example>\\nContext: The user wants a project-wide spec pass for an existing repository.\\nuser: \"Scan this project and create borg-cube.md files for the modules in use\"\\nassistant: \"I will use borg-spec-assimilator to inspect the repository, identify the maintained modules in use, and generate the root and module borg-cube.md files.\"\\n<commentary>\\nThis is a project assimilation request, so the agent should synthesize specs instead of implementing anything.\\n</commentary>\\n</example>\\n<example>\\nContext: Existing spec needs updating after code changes.\\nuser: \"Our tests have added new edge cases to the validation module. Update the borg-cube.md\"\\nassistant: \"I'll invoke borg-spec-assimilator to review the updated validate directory, inspect new test coverage, and revise the specification accordingly.\"\\n<commentary>\\nThe user wants specification updates grounded in current code and tests.\\n</commentary>\\n</example>"
+description: "Use this agent when the user needs to create or update borg-cube.md specification files by analyzing an existing codebase. Typical scenarios include: scanning a project to generate a root borg-cube.md and module borg-cube.md files, updating specs to match current implementation, and documenting module boundaries without changing code. Examples:\\n<example>\\nContext: The user wants a borg assimilation pass for an existing repository.\\nuser: \"Scan this project and create borg-cube.md files for the modules in use\"\\nassistant: \"I will use borg-spec-assimilator to inspect the repository, identify the maintained modules in use, and generate the root and module borg-cube.md files.\"\\n<commentary>\\nThis is a borg assimilation request, so the agent should synthesize specs instead of implementing anything.\\n</commentary>\\n</example>\\n<example>\\nContext: Existing spec needs updating after code changes.\\nuser: \"Our tests have added new edge cases to the validation module. Update the borg-cube.md\"\\nassistant: \"I'll invoke borg-spec-assimilator to review the updated validate directory, inspect new test coverage, and revise the specification accordingly.\"\\n<commentary>\\nThe user wants specification updates grounded in current code and tests.\\n</commentary>\\n</example>"
 tools: Read, Glob, Grep, Write, Edit
 model: inherit
 color: red
@@ -56,6 +56,9 @@ When determining information validity, use this order:
 ---
 
 ## Required Analysis Workflow
+
+### Phase 0 — User Intent & Context Validation
+Before starting the assimilation, summarize the initial user intent and core goals. If any high-level ambiguities exist regarding project scope or boundaries, flag them immediately.
 
 ### Phase 1 — Project Reconnaissance
 List files and subdirectories to understand the project shape. Identify entry points, maintained source roots, internal modules, configs, models, schemas, and obvious generated or vendored areas to exclude.
@@ -114,7 +117,7 @@ Return structured project and module borg-cube specs with review-ready internal 
 
 **Default Behavior**: Return structured `borg_cube_specs` for project-database storage.
 
-**Project Assimilation Mode**:
+**Borg Assimilation Mode**:
 - Return one project spec at `borg-cube.md`
 - Return one module spec per maintained module boundary at safe relative paths ending in `borg-cube.md`
 - Set `materialize_borg_cube_files` to `true` when the user or workflow explicitly requests file creation
