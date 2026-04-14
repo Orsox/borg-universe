@@ -22,31 +22,40 @@ When performing a borg assimilation review, you MUST produce a **Compact Review 
 All information shown to the user must be **compressed and structured** as follows:
 
 **A. Summary (Max 5–7 bullet points)**
-* Core goal
+* Core assimilation goal
 * Key approach
-* Main components affected
-* Major assumptions
+* Systems/components affected
+* Key assumptions
 
 **B. Critical Points ⚠️ (Highly Visible)**
-Explicitly highlight:
+Explicitly highlight high-impact issues:
 * ⚠️ Critical Concern: [Description]
 * ❗ Open Question: [Description]
 * 🔍 Needs Validation: [Description]
 * (Only include items that truly require human attention.)
 
-**C. Decisions to Confirm**
-List only **clear decision points**, e.g.:
-* Use approach A vs B?
-* Include/exclude component X?
+**C. Required Cube Files (NEW – MUST BE INCLUDED)**
+Provide a **clear, minimal preview of required files**, e.g.:
+* cube.project.json: [Short purpose (1 line max)]
+* cube.agent.<name>.json: [Short purpose (1 line max)]
+* cube.skill.<name>.json: [Short purpose (1 line max)]
+* cube.context.md: [Short purpose (1 line max)]
+(Only include files that are actually required for this assimilation.)
+
+**D. Decisions to Confirm**
+List only **clear, essential decision points**, e.g.:
+* Architecture choices
+* Inclusion/exclusion of agents/skills
+* File structure deviations
 
 #### Dedicated Human Feedback Section
 Provide this block exactly as shown below:
-```
+```id="h3k91x"
 === HUMAN REVIEW INPUT ===
 [User enters feedback, approvals, corrections here]
 ==========================
 ```
-**Constraint**: You MUST stop after providing this output and wait for the system to receive user feedback.
+**Constraint**: You MUST stop after providing this output and wait for the system to receive user feedback via the task repository.
 
 ---
 
@@ -55,11 +64,24 @@ Provide this block exactly as shown below:
 After receiving and parsing the human review input, you must:
 1. Summarize feedback in 2–3 lines.
 2. Confirm interpreted changes.
-3. Evaluate whether the current **agents and skills configuration** is still optimal for the next steps.
+3. Evaluate whether the current **agents and skills configuration** is still optimal for the next steps (e.g., Cube File Synthesis).
 4. **Dynamically adjust**:
    - Add missing agents or skills.
    - Remove unnecessary ones.
-   - Reconfigure responsibilities if needed.
+   - Refine responsibilities if needed.
+
+**Suggested Agent Roles (ensure presence or equivalent):**
+* **Assimilation Planner Agent**: Orchestrates the assimilation process.
+* **Structure / Schema Agent**: Ensures architectural and schema consistency.
+* **Cube File Generator Agent**: Specialized in synthesizing cube-*.json and cube-*.md files.
+* **Validation Agent**: Verifies generated artifacts against requirements.
+
+**Suggested Skills:**
+* Structure Analysis Skill
+* File Generation Skill (JSON + MD)
+* Schema Validation Skill
+* Dependency Mapping Skill
+
 5. **Adjustment Criteria**:
    - Goal-driven (aligned with reviewed requirements).
    - Minimal but sufficient (no unnecessary complexity).

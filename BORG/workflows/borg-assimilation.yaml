@@ -34,8 +34,21 @@ nodes:
         prompt: >-
           Produce a Compact Review Output for the assimilated project specifications.
           Highlight critical points, assumptions, and clear decision points.
+          Include a clear, minimal preview of the required Cube files (cube-*.json, cube-*.md).
           Provide the === HUMAN REVIEW INPUT === block and WAIT for feedback.
           After receiving feedback, perform Adaptive Agent & Skill Adjustment.
+        status: draft
+  - id: cube-file-synthesizer
+    borg_name: Cube File Synthesis Phase
+    role: generator
+    agent: borg-cube-generator
+    tasks:
+      - id: generate-cube-files
+        title: Synthesize Cube-Borg and Cube-MD files
+        prompt: >-
+          Generate all required Cube files (cube-*.json and cube-*.md) based on the reviewed specifications and user feedback.
+          Ensure consistent naming, machine-readable JSON structure, and human-readable Markdown context.
+          Output a short summary mapping each file back to the requirements and user decisions.
         status: draft
 steps:
   - id: assimilation
@@ -58,3 +71,8 @@ steps:
     mode: sequential
     nodes:
       - human-review-node
+  - id: synthesis
+    title: Cube File Synthesis
+    mode: sequential
+    nodes:
+      - cube-file-synthesizer
