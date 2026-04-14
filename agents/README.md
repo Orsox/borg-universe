@@ -17,7 +17,7 @@
 
 | Agent | Zweck |
 |---|---|
-| **borg-spec-assimilator** | Erstellt oder aktualisiert `borg-cube.md`-Spezifikationen durch Analyse eines bestehenden Codeverzeichnisses |
+| **borg-spec-assimilator** | Scannt bestehende Projekte, erzeugt Root- und Modul-`borg-cube.md`-Spezifikationen und beschreibt nur den Ist-Zustand |
 | **borg-spec-augmentation** | Erweitert bestehende Specs proaktiv: Gap-Analyse, fehlende Edge Cases, schwache Akzeptanzkriterien, unklare Interfaces |
 | **borg-requirement-node** | Reviewt `borg-cube.md`-Dateien auf Anforderungsqualität — bevor die Implementierung startet |
 
@@ -58,7 +58,7 @@ borg-queen-architect         →  Spec (borg-cube.md) & Architektur planen
   ↓  (max. 3 Korrekturzyklen bei Review-Fehlern)
 borg-requirement-node        →  Spec reviewen & qualitätssichern
   ↓
-borg-spec-assimilator        →  Spec ergänzen (aus bestehendem Code)
+borg-spec-assimilator        →  Bestehendes Projekt scannen und Root-/Modul-Specs erzeugen
   ↓
 borg-spec-augmentation       →  Spec erweitern & lückenfüllen
   ↓

@@ -1,0 +1,401 @@
+{% extends "ui_template.html" %}
+
+{% block title %}Workflow: {{ task.title }} - Borg Universe{% endblock %}
+{% block eyebrow %}Workflow{% endblock %}
+{% block heading %}{{ task.title }}{% endblock %}
+{% block summary %}Visuelle Workflow-Darstellung und Logs für diese Aufgabe.{% endblock %}
+
+{% block page_actions %}
+<a class="button secondary" href="/tasks/{{ task.id }}">Back to Details</a>
+<span class="badge {{ task.status|badge_class }}" id="task-status-badge">{{ task.status }}</span>
+{% endblock %}
+
+{% block content %}
+<style>
+    .workflow-container {
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+    }
+
+    .tabs {
+        display: flex;
+        gap: 10px;
+        border-bottom: 1px solid var(--line);
+        margin-bottom: 20px;
+    }
+
+    .tab {
+        padding: 10px 20px;
+        cursor: pointer;
+        border: 1px solid transparent;
+        border-bottom: none;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        font-weight: bold;
+        font-size: 0.9rem;
+    }
+
+    .tab.active {
+        color: var(--accent);
+        border-color: var(--line);
+        background: var(--surface);
+        border-radius: var(--radius) var(--radius) 0 0;
+        margin-bottom: -1px;
+    }
+
+    .tab-content {
+        display: none;
+    }
+
+    .tab-content.active {
+        display: block;
+    }
+
+    /* Graph Styles */
+    .graph-view {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 40px 0;
+        background: var(--surface-strong);
+        border-radius: var(--radius);
+        border: 1px solid var(--line);
+        min-height: 500px;
+        position: relative;
+        overflow: auto;
+    }
+
+    .workflow-node {
+        width: 320px;
+        background: var(--surface);
+        border: 1px solid var(--line-strong);
+        border-radius: 8px;
+        padding: 15px;
+        margin-bottom: 40px;
+        position: relative;
+        transition: all 0.3s ease;
+        z-index: 2;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    }
+
+    .workflow-node:hover {
+        border-color: var(--accent);
+        box-shadow: 0 0 15px rgba(121, 210, 142, 0.2);
+    }
+
+    .workflow-node.active {
+        border-color: var(--accent);
+        box-shadow: 0 0 20px rgba(121, 210, 142, 0.4);
+        animation: pulse 2s infinite;
+    }
+
+    .workflow-node.completed {
+        border-color: var(--primary);
+    }
+
+    .workflow-node.inactive {
+        opacity: 0.5;
+        filter: grayscale(0.5);
+    }
+
+    @keyframes pulse {
+        0% { box-shadow: 0 0 0 0 rgba(121, 210, 142, 0.4); }
+        70% { box-shadow: 0 0 0 15px rgba(121, 210, 142, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(121, 210, 142, 0); }
+    }
+
+    .node-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 10px;
+    }
+
+    .node-type {
+        font-size: 0.7rem;
+        color: var(--accent);
+        background: rgba(121, 210, 142, 0.1);
+        padding: 2px 6px;
+        border-radius: 4px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+
+    .node-status {
+        font-size: 0.8rem;
+    }
+
+    .node-name {
+        font-weight: bold;
+        font-size: 1.1rem;
+        margin-bottom: 5px;
+        color: var(--text);
+    }
+
+    .node-runtime {
+        font-size: 0.8rem;
+        color: var(--text-muted);
+    }
+
+    .node-details {
+        margin-top: 10px;
+        padding-top: 10px;
+        border-top: 1px solid var(--line);
+        font-size: 0.85rem;
+        display: none;
+    }
+
+    .workflow-node.expanded .node-details {
+        display: block;
+    }
+
+    .detail-item {
+        margin-bottom: 8px;
+    }
+
+    .detail-label {
+        color: var(--text-muted);
+        font-size: 0.75rem;
+        text-transform: uppercase;
+    }
+
+    .detail-value {
+        color: var(--text);
+        word-break: break-all;
+    }
+
+    /* Connections */
+    .connector {
+        position: absolute;
+        width: 2px;
+        background: var(--line-strong);
+        z-index: 1;
+    }
+
+    .connector.active {
+        background: var(--accent);
+        box-shadow: 0 0 8px var(--accent);
+    }
+
+    .parallel-nodes {
+        display: flex;
+        gap: 40px;
+        justify-content: center;
+        margin-bottom: 40px;
+    }
+
+    .parallel-nodes .workflow-node {
+        margin-bottom: 0;
+    }
+
+    /* Logs View */
+    .logs-view {
+        background: #050706;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 0;
+        max-height: 70vh;
+        overflow: auto;
+    }
+
+    .log-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-family: Consolas, Monaco, monospace;
+        font-size: 0.85rem;
+    }
+
+    .log-table th {
+        background: var(--surface);
+        text-align: left;
+        padding: 10px;
+        color: var(--text-muted);
+        position: sticky;
+        top: 0;
+    }
+
+    .log-table td {
+        padding: 8px 10px;
+        border-bottom: 1px solid #111;
+    }
+
+    .log-row:hover {
+        background: rgba(121, 210, 142, 0.05);
+    }
+
+    .log-time { color: var(--text-muted); width: 180px; }
+    .log-agent { color: var(--accent); width: 150px; }
+    .log-skill { color: var(--copper); width: 150px; }
+    .log-message { color: var(--text); }
+</style>
+
+<div class="workflow-container">
+    <div class="tabs">
+        <div class="tab active" onclick="switchTab('graph')">Graph</div>
+        <div class="tab" onclick="switchTab('logs')">Logs</div>
+    </div>
+
+    <div id="graph-content" class="tab-content active">
+        <div class="graph-view" id="workflow-graph">
+            {% if stages %}
+                {% for stage in stages %}
+                    {% set stage_loop = loop %}
+                    {% if stage.nodes|length > 1 %}
+                        <div class="parallel-nodes">
+                            {% for node in stage.nodes %}
+                                {{ render_node(node, loop.index, stage_loop.index) }}
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        {% for node in stage.nodes %}
+                            {{ render_node(node, loop.index, stage_loop.index) }}
+                        {% endfor %}
+                    {% endif %}
+                    
+                    {% if not loop.last %}
+                        <div class="connector {{ 'active' if task.status == 'done' or loop.index < stages|length }}"></div>
+                    {% endif %}
+                {% endfor %}
+            {% else %}
+                <div class="panel">
+                    <div class="panel-body">
+                        <p class="muted">No workflow definition available for this task.</p>
+                    </div>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div id="logs-content" class="tab-content">
+        <div class="logs-view">
+            <table class="log-table">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Agent</th>
+                        <th>Skill / Tool</th>
+                        <th>Message / Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for log in logs %}
+                    <tr class="log-row">
+                        <td class="log-time">{{ log.created_at }}</td>
+                        <td class="log-agent">{{ log.agent_name or "system" }}</td>
+                        <td class="log-skill">{{ log.skill_name or "" }} / {{ log.tool_name or "" }}</td>
+                        <td class="log-message">
+                            {{ log.message or "" }}
+                            {% if log.input_data %}
+                            <details>
+                                <summary>Input</summary>
+                                <pre>{{ log.input_data }}</pre>
+                            </details>
+                            {% endif %}
+                            {% if log.output_data %}
+                            <details>
+                                <summary>Output</summary>
+                                <pre>{{ log.output_data }}</pre>
+                            </details>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="4" class="muted" style="text-align: center; padding: 20px;">No logs found for this task.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+{% macro render_node(node, node_index, stage_index) %}
+    {% set is_active = (task.status == 'running' and stage_index == 1) %} {# Mehr Heuristik: Erster Schritt aktiv wenn running #}
+    {% set is_completed = (task.status == 'done' or (task.status != 'queued' and stage_index < stages|length)) %}
+    
+    <div class="workflow-node {{ 'active' if is_active }} {{ 'completed' if is_completed }} {{ 'inactive' if not is_active and not is_completed }}" 
+         onclick="this.classList.toggle('expanded')">
+        <div class="node-header">
+            <span class="node-type">{{ node.role or 'AGENT' }}</span>
+            <span class="node-status">
+                {% if is_completed %}✔{% elif is_active %}⏳{% else %}○{% endif %}
+            </span>
+        </div>
+        <div class="node-name">{{ node.borg_name }}</div>
+        <div class="node-runtime">ID: {{ node.id }}</div>
+        
+        <div class="node-details">
+            <div class="detail-item">
+                <div class="detail-label">Agent</div>
+                <div class="detail-value">{{ node.agent or 'N/A' }}</div>
+            </div>
+            {% if node.subagents %}
+            <div class="detail-item">
+                <div class="detail-label">Subagents</div>
+                <div class="detail-value">{{ node.subagents|join(', ') }}</div>
+            </div>
+            {% endif %}
+            {% if node.tasks %}
+            <div class="detail-item">
+                <div class="detail-label">Tasks</div>
+                <div class="detail-value">
+                    {% for t in node.tasks %}
+                        • {{ t.title }}<br>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+{% endmacro %}
+
+<script>
+    function switchTab(tabName) {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        
+        document.querySelector(`.tab[onclick="switchTab('${tabName}')"]`).classList.add('active');
+        document.getElementById(`${tabName}-content`).classList.add('active');
+    }
+
+    // Einfache Verbindungs-Linien Positionierung
+    function positionConnectors() {
+        const graph = document.getElementById('workflow-graph');
+        const nodes = graph.querySelectorAll('.workflow-node, .parallel-nodes');
+        const connectors = graph.querySelectorAll('.connector');
+        
+        connectors.forEach((conn, i) => {
+            const startNode = nodes[i];
+            const endNode = nodes[i+1];
+            
+            if (startNode && endNode) {
+                const startRect = startNode.getBoundingClientRect();
+                const endRect = endNode.getBoundingClientRect();
+                const graphRect = graph.getBoundingClientRect();
+                
+                const top = startRect.bottom - graphRect.top;
+                const height = endRect.top - startRect.bottom;
+                const left = (startRect.left + startRect.width/2) - graphRect.left;
+                
+                conn.style.top = top + 'px';
+                conn.style.left = left + 'px';
+                conn.style.height = height + 'px';
+            }
+        });
+    }
+
+    window.addEventListener('load', positionConnectors);
+    window.addEventListener('resize', positionConnectors);
+    
+    // Polling für Echtzeit-Feeling (alle 5 Sekunden)
+    /*
+    setInterval(() => {
+        if (document.getElementById('task-status-badge').innerText.trim() === 'running') {
+            location.reload();
+        }
+    }, 5000);
+    */
+</script>
+{% endblock %}

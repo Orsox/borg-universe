@@ -6,6 +6,9 @@
 {% block summary %}Status, project, Supabase lookup, history, and result artifacts for this task.{% endblock %}
 {% block page_actions %}
 <a class="button secondary" href="/tasks">Back</a>
+{% if task.workflow_id %}
+<a class="button" href="/tasks/{{ task.id }}/workflow">View Workflow</a>
+{% endif %}
 {% if task.status == "review_required" %}
 <a class="button" href="/tasks/{{ task.id }}/review">Review task</a>
 {% endif %}

@@ -553,7 +553,7 @@ def test_workflows_api_returns_yaml_workflow() -> None:
     assert response.status_code == 200
     workflows = response.json()
     assert workflows[0]["id"] == "assimilation-demo"
-    assert workflows[0]["entry_node"] == "queen-architect"
+    assert workflows[0]["entry_node"] == "spec-assimilator"
     assert {workflow["id"] for workflow in workflows} >= {"assimilation-demo", "new_borg_cube_project"}
     new_cube = next(workflow for workflow in workflows if workflow["id"] == "new_borg_cube_project")
     assert [step["id"] for step in new_cube["steps"]] == [

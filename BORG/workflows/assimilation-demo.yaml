@@ -1,62 +1,42 @@
 id: assimilation-demo
-title: Assimilation Demo
-description: Example workflow for an agent with a start node, task handoff, and parallel-running Borg nodes.
+title: Project Assimilation
+description: Scan an existing project, generate project and module borg-cube specifications, review them, and stop without changing source code.
 status: queued
-entry_node: queen-architect
+entry_node: spec-assimilator
 nodes:
-  - id: queen-architect
-    borg_name: Borg Queen Architect
-    role: coordinator
-    agent: borg-queen-architect
-    tasks:
-      - id: intake
-        title: Assimilate target state
-        prompt: Normalize requirements and break the process into controlled phases.
-        status: queued
   - id: spec-assimilator
     borg_name: Spec Assimilator
-    role: agent
+    role: assimilator
     agent: borg-spec-assimilator
     tasks:
+      - id: project-scan
+        title: Scan project and materialize borg-cube specs
+        prompt: >-
+          Scan the existing target project and identify the maintained modules that are actually used by the codebase, configuration, or entry points. Create or update a root borg-cube.md plus one module borg-cube.md for every used module boundary. Set materialize_borg_cube_files to true so the specifications are written into the target project. The root borg-cube.md must use the canonical sections and, inside "Submodules / Internal Structure", list each module spec path with a short responsibility statement, the dependency or consumer relationship, and clear guidance for agents about when to open that module spec. Never modify source code, tests, dependency manifests, build files, generated assets, or runtime configuration. Only describe the project through borg-cube.md files, and mark all weak evidence as assumptions.
+        status: draft
+  - id: requirement-node
+    borg_name: Requirement Node
+    role: reviewer
+    agent: borg-requirement-node
+    tasks:
       - id: spec-review
-        title: Review specification
-        prompt: Convert inputs into testable acceptance criteria.
-        status: draft
-  - id: implementation-drone
-    borg_name: Implementation Drone
-    role: agent
-    agent: borg-implementation-drone
-    subagents:
-      - borg-sub-units
-      - borg-dependency-mapper
-    tasks:
-      - id: implementation-plan
-        title: Prepare implementation
-        prompt: Identify files, dependencies, and risks for the implementation.
-        status: draft
-  - id: cube-testing-node
-    borg_name: Cube Testing Node
-    role: verifier
-    agent: borg-cube-testing-node
-    tasks:
-      - id: verification
-        title: Verify result
-        prompt: Collect tests, artifacts, and open review points.
+        title: Review assimilated borg-cube specs
+        prompt: >-
+          Review the generated project and module borg_cube_specs for structural quality, evidence fidelity, terminology consistency, and agent usability. Ensure the root borg-cube.md references all generated module specs with safe relative paths and actionable one-line guidance, and ensure no implementation or code-change instructions leaked into the documentation. Return corrected borg_cube_specs whenever fixes are required. Do not create implementation_tasks and do not request code changes.
         status: draft
 steps:
-  - id: intake
-    title: Initiate start node
+  - id: assimilation
+    title: Scan existing project
     mode: sequential
-    nodes:
-      - queen-architect
-  - id: parallel-analysis
-    title: Parallelize specification and implementation
-    mode: parallel
     nodes:
       - spec-assimilator
-      - implementation-drone
-  - id: verification
-    title: Review result
+  - id: review
+    title: Review generated specifications
     mode: sequential
     nodes:
-      - cube-testing-node
+      - requirement-node
+    retry:
+      condition: nodes['requirement-node'].output.retry_required == true
+      max_attempts: 2
+      target_node: spec-assimilator
+      message: 'Specification issues found. Regenerate the project and module borg_cube_specs based on this review: {{nodes[''requirement-node''].output.errors}}'

@@ -9,10 +9,19 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.api.router import api_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
-from app.db.repositories import ProjectRepository, ProjectSpecRepository, TaskRepository
+from app.db.repositories import (
+    BorgRegistryRepository,
+    ProjectRegistryBindingRepository,
+    ProjectRepository,
+    ProjectSpecRepository,
+    TaskRepository,
+)
 from app.db.supabase_client import SupabaseRestClient, SupabaseRestError
 from app.models.projects import PROJECT_TYPES, ProjectCreate
+from app.models.tasks import TaskCreate
 from app.services.orchestration_settings_store import OrchestrationSettingsStore
+from app.services.project_scanner import scan_drive_for_projects
+from app.services.workflow_store import WorkflowStore
 from app.ui import templates
 
 
@@ -122,12 +131,27 @@ def create_app() -> FastAPI:
 
     @app.get("/projects", response_class=HTMLResponse, tags=["system"])
     async def projects_overview(request: Request) -> Response:
+        client = SupabaseRestClient(settings)
         try:
-            projects = ProjectRepository(SupabaseRestClient(settings)).list_projects(include_inactive=True)
+            projects = ProjectRepository(client).list_projects(include_inactive=True)
             project_error = ""
         except SupabaseRestError as exc:
             projects = []
             project_error = str(exc)
+
+        try:
+            agents = BorgRegistryRepository(client, "agents").list_items()
+            skills = BorgRegistryRepository(client, "skills").list_items()
+            
+            # Fetch existing bindings
+            binding_repo = ProjectRegistryBindingRepository(client)
+            all_bindings = []
+            for p in projects:
+                p["bindings"] = binding_repo.list_for_project(p["id"])
+        except SupabaseRestError:
+            agents = []
+            skills = []
+
         return templates.TemplateResponse(
             request,
             "pages/projects.html",
@@ -139,8 +163,126 @@ def create_app() -> FastAPI:
                 "projects": projects,
                 "project_count": len(projects),
                 "project_error": project_error,
+                "agents": agents,
+                "skills": skills,
             },
         )
+
+    @app.get("/projects/import", response_class=HTMLResponse, tags=["system"])
+    async def import_projects_page(request: Request) -> Response:
+        scanned = scan_drive_for_projects(settings.workbench_root)
+        try:
+            existing = ProjectRepository(SupabaseRestClient(settings)).list_projects(include_inactive=True)
+            existing_ids = {p["id"] for p in existing}
+        except SupabaseRestError:
+            existing_ids = set()
+
+        # Filter out already imported projects
+        available = [p for p in scanned if p["id"] not in existing_ids]
+
+        return templates.TemplateResponse(
+            request,
+            "pages/projects_import.html",
+            {
+                "active": "projects",
+                "system_status": "configured" if settings.supabase_configured else "intervention",
+                "supabase_configured": settings.supabase_configured,
+                "mcp_configured": bool(settings.mcp_server_url),
+                "projects": available,
+                "workbench_path": str(settings.workbench_root),
+            },
+        )
+
+    @app.post("/projects/import", tags=["system"])
+    async def do_import_projects(request: Request) -> RedirectResponse:
+        form = await request.form()
+        selected_ids = form.getlist("project_ids")
+        
+        scanned = scan_drive_for_projects(settings.workbench_root)
+        to_import = [p for p in scanned if p["id"] in selected_ids]
+        
+        repo = ProjectRepository(SupabaseRestClient(settings))
+        for p in to_import:
+            project = ProjectCreate(
+                id=p["id"],
+                name=p["name"],
+                description=p["description"],
+                project_type=p["project_type"],
+                project_directory=p["path"],
+                active=True
+            )
+            try:
+                repo.create_project(project)
+            except Exception:
+                # Skip if already exists or other error
+                pass
+        
+        ids_query = ",".join(selected_ids)
+        return RedirectResponse(f"/projects/import/tasks?project_ids={ids_query}", status_code=303)
+
+    @app.get("/projects/import/tasks", response_class=HTMLResponse, tags=["system"])
+    async def import_tasks_page(request: Request) -> Response:
+        project_ids = request.query_params.get("project_ids", "").split(",")
+        project_ids = [pid for pid in project_ids if pid]
+        
+        repo = ProjectRepository(SupabaseRestClient(settings))
+        projects = []
+        for pid in project_ids:
+            p = repo.get_project(pid)
+            if p:
+                projects.append(p)
+        
+        workflow_store = WorkflowStore(settings.workflows_root)
+        workflows = workflow_store.list_workflows()
+        
+        return templates.TemplateResponse(
+            request,
+            "pages/projects_import_tasks.html",
+            {
+                "active": "projects",
+                "system_status": "configured" if settings.supabase_configured else "intervention",
+                "supabase_configured": settings.supabase_configured,
+                "mcp_configured": bool(settings.mcp_server_url),
+                "projects": projects,
+                "workflows": workflows,
+            },
+        )
+
+    @app.post("/projects/import/tasks", tags=["system"])
+    async def do_import_tasks(request: Request) -> RedirectResponse:
+        form = await request.form()
+        project_ids = form.getlist("project_ids")
+        
+        task_repo = TaskRepository(SupabaseRestClient(settings))
+        
+        for pid in project_ids:
+            title = form.get(f"title_{pid}")
+            workflow_id = form.get(f"workflow_id_{pid}")
+            description = form.get(f"description_{pid}", "")
+            platform = form.get(f"platform_{pid}")
+            mcu = form.get(f"mcu_{pid}")
+            board = form.get(f"board_{pid}")
+            topic = form.get(f"topic_{pid}")
+            
+            if title and workflow_id:
+                task = TaskCreate(
+                    title=title,
+                    description=description,
+                    project_id=pid,
+                    workflow_id=workflow_id,
+                    target_platform=_optional(platform),
+                    target_mcu=_optional(mcu),
+                    board=_optional(board),
+                    topic=_optional(topic),
+                    requested_by="System Import"
+                )
+                try:
+                    task_repo.create_task(task)
+                except Exception:
+                    # Log or handle error
+                    pass
+                    
+        return RedirectResponse("/tasks", status_code=303)
 
     @app.post("/projects", tags=["system"])
     async def create_project(request: Request) -> RedirectResponse:
@@ -163,6 +305,43 @@ def create_app() -> FastAPI:
         )
         ProjectRepository(SupabaseRestClient(settings)).create_project(project)
         return RedirectResponse("/projects/new", status_code=303)
+
+    @app.post("/projects/{project_id}/bind", tags=["system"])
+    async def bind_project_units(project_id: str, request: Request) -> RedirectResponse:
+        form = await request.form()
+        agent_names = form.getlist("agent_names")
+        skill_names = form.getlist("skill_names")
+        
+        units = []
+        for name in agent_names:
+            units.append({"name": name, "type": "agent"})
+        for name in skill_names:
+            units.append({"name": name, "type": "skill"})
+            
+        client = SupabaseRestClient(settings)
+        repo = ProjectRegistryBindingRepository(client)
+        
+        try:
+            # We could clear old bindings or just add new ones. 
+            # The UI implies we select what we want to bind.
+            # To be simple: we ADD them. If we want to replace, we'd need unbind_all first.
+            # Given the prompt "alle oder nur einzelne anzuwählen", 
+            # it might mean "bind these selected ones".
+            repo.bind_units(project_id, units)
+        except SupabaseRestError as exc:
+            print(f"Error binding units: {exc}")
+            
+        return RedirectResponse("/projects", status_code=303)
+
+    @app.post("/projects/{project_id}/unbind", tags=["system"])
+    async def unbind_project_units(project_id: str) -> RedirectResponse:
+        client = SupabaseRestClient(settings)
+        repo = ProjectRegistryBindingRepository(client)
+        try:
+            repo.unbind_all(project_id)
+        except SupabaseRestError as exc:
+            print(f"Error unbinding units: {exc}")
+        return RedirectResponse("/projects", status_code=303)
 
     @app.post("/projects/{project_id}/delete", tags=["system"])
     async def delete_project(project_id: str) -> RedirectResponse:

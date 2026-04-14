@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.core.config import Settings, get_settings
-from app.db.repositories import ArtifactRepository, ProjectRepository, TaskRepository
+from app.db.repositories import ArtifactRepository, McpAuditRepository, ProjectRepository, TaskRepository
 from app.db.supabase_client import SupabaseRestClient, SupabaseRestError
 from app.models.tasks import TASK_STATUSES, TaskCreate, TaskStatusUpdate
 from app.services.workflow_store import WorkflowStore, WorkflowStoreError
@@ -275,6 +275,51 @@ async def task_detail(
             "empty_message": "The worker creates history entries and artifacts once the task is processed.",
         },
     )
+
+
+@router.get("/tasks/{task_id}/workflow", response_class=HTMLResponse)
+async def task_workflow(
+    task_id: str,
+    request: Request,
+    repo: Annotated[TaskRepository, Depends(get_task_repository)],
+    workflow_store: Annotated[WorkflowStore, Depends(get_workflow_store)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> HTMLResponse:
+    try:
+        task = repo.get_task(task_id)
+        if not task:
+            return HTMLResponse("Task not found", status_code=404)
+        events = repo.list_events(task_id)
+        logs = McpAuditRepository(_client(settings)).list_logs({"task_id": task_id})
+    except SupabaseRestError as exc:
+        return HTMLResponse(str(exc), status_code=503)
+
+    workflow = None
+    stages = []
+    if task.get("workflow_id"):
+        workflow = workflow_store.get_workflow(task["workflow_id"])
+        if workflow:
+            stages = workflow_store.build_stages(workflow)
+
+    return templates.TemplateResponse(
+        request,
+        "pages/task_workflow.html",
+        {
+            "active": "tasks",
+            "task": task,
+            "events": events,
+            "logs": logs,
+            "workflow": workflow,
+            "stages": stages,
+        },
+    )
+
+
+def _client(settings: Settings) -> SupabaseRestClient:
+    try:
+        return SupabaseRestClient(settings)
+    except SupabaseRestError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 
 
 @router.get("/tasks/{task_id}/review", response_class=HTMLResponse)

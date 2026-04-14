@@ -367,6 +367,45 @@ class BorgRegistryRepository:
         return rows[0] if rows else None
 
 
+class ProjectRegistryBindingRepository:
+    def __init__(self, client: SupabaseRestClient) -> None:
+        self.client = client
+        self.table = "project_registry_bindings"
+
+    def list_for_project(self, project_id: str) -> list[dict[str, Any]]:
+        return self.client.request(
+            "GET",
+            self.table,
+            query={"select": "*", "project_id": f"eq.{project_id}"},
+        )
+
+    def bind_units(self, project_id: str, units: list[dict[str, str]]) -> list[dict[str, Any]]:
+        if not units:
+            return []
+
+        body = [
+            {"project_id": project_id, "unit_name": u["name"], "unit_type": u["type"]}
+            for u in units
+        ]
+
+        return self.client.request(
+            "POST",
+            self.table,
+            query={"select": "*", "on_conflict": "project_id,unit_name,unit_type"},
+            body=body,
+            prefer="resolution=merge-duplicates,return=representation",
+        )
+
+    def unbind_all(self, project_id: str) -> bool:
+        self.client.request(
+            "DELETE",
+            self.table,
+            query={"project_id": f"eq.{project_id}"},
+            prefer="return=minimal",
+        )
+        return True
+
+
 class McpAuditRepository:
     def __init__(self, client: SupabaseRestClient) -> None:
         self.client = client

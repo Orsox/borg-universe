@@ -8,6 +8,8 @@ services:
         INSTALL_PLATFORMIO: ${INSTALL_PLATFORMIO:-false}
     image: borg-universe:latest
     container_name: borg-universe
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${APP_PORT:-8000}:8000"
     environment:
@@ -38,6 +40,7 @@ services:
       - ./agents:/app/agents
       - ./skills:/app/skills
       - ./BORG:/app/BORG
+      - ${WORKBENCH_HOST_ROOT:-./workbench_placeholder}:/workbench
       - ./main.py:/app/main.py
       - ./artifacts:/app/artifacts
     restart: unless-stopped
@@ -61,6 +64,8 @@ services:
         INSTALL_PLATFORMIO: ${INSTALL_PLATFORMIO:-false}
     image: borg-universe:latest
     container_name: borg-universe-mcp
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: sh -c "uvicorn mcp_server.server:app --host 0.0.0.0 --port 9000"
     ports:
       - "${MCP_PORT:-9000}:9000"
@@ -107,6 +112,8 @@ services:
         INSTALL_PLATFORMIO: ${INSTALL_PLATFORMIO:-false}
     image: borg-universe:latest
     container_name: borg-universe-worker
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: python -m app.worker
     environment:
       APP_NAME: ${APP_NAME:-Borg Universe}
@@ -125,7 +132,7 @@ services:
       CLAUDE_EXECUTABLE: ${CLAUDE_EXECUTABLE:-claude}
       CLAUDE_PERMISSION_MODE: ${CLAUDE_PERMISSION_MODE:-bypassPermissions}
       CLAUDE_PROJECT_ROOT: ${CLAUDE_PROJECT_ROOT:-/app}
-      WORKBENCH_HOST_ROOT: ${WORKBENCH_HOST_ROOT:-D:\Workbench}
+      WORKBENCH_HOST_ROOT: ${WORKBENCH_HOST_ROOT:-./workbench_placeholder}
       WORKBENCH_CONTAINER_ROOT: ${WORKBENCH_CONTAINER_ROOT:-/workbench}
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-1800}
       CLAUDE_TIMEOUT_SECONDS: ${CLAUDE_TIMEOUT_SECONDS:-1800}
@@ -143,7 +150,7 @@ services:
       - ./agents:/app/agents
       - ./skills:/app/skills
       - ./BORG:/app/BORG
-      - D:/Workbench:/workbench
+      - ${WORKBENCH_HOST_ROOT:-./workbench_placeholder}:/workbench
       - ./.claude:/app/.claude
       - ./main.py:/app/main.py
       - ./artifacts:/app/artifacts
