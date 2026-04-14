@@ -1,0 +1,114 @@
+id: new_borg_cube_project
+title: New Borg Cube Project
+description: Create project and module borg-cube specifications, review and augment them, disassemble the approved scope into small database tasks, then execute implementation task by task.
+status: queued
+entry_node: queen-architect
+nodes:
+- id: queen-architect
+  borg_name: Queen
+  role: architect
+  agent: borg-queen-architect
+  subagents: []
+  tasks:
+  - id: architecture-planning
+    title: Create base project and module borg-cube specs
+    prompt: >-
+      Create or update a minimal runnable base project in the target directory, then create a project-level borg-cube.md that summarizes the project and lists module specs. The root borg-cube.md must be a clean implementation-facing specification with these sections: Metadata, Goal, Problem Statement, Scope, Dependencies, Submodules / Internal Structure, Functional Requirements with FR-* IDs, Non-Functional Requirements with NFR-* IDs, Constraints, Interfaces, Error Handling, and Assumptions / Open Points. Create one module borg-cube.md spec per module with a short capability briefing. Return borg_cube_specs for database storage and set materialize_borg_cube_files true so the root borg-cube.md and module borg-cube.md files are written to the target project. When the target directory is empty or missing core files, return project_files with safe relative paths and text content for the smallest appropriate scaffold, such as README.md, pyproject.toml or requirements.txt, source package/module files, and tests.
+    status: queued
+    depends_on: []
+  prompt: ''
+- id: requirement-node
+  borg_name: Borg Requirement Node
+  role: reviewer
+  agent: borg-requirement-node
+  subagents: []
+  tasks:
+  - id: spec-review
+    title: Review and augment borg-cube specs
+    prompt: Review all project and module borg_cube_specs and any generated project_files for quality, consistency, missing information, and implementation readiness. Ensure the project-level borg-cube.md can be materialized cleanly at the project root, includes all canonical sections, contains traceable FR-* and NFR-* requirements, and module borg-cube.md files use safe relative module paths. Return corrected borg_cube_specs whenever review changes are needed. Add missing information to the spec set when the user provides review notes.
+    status: draft
+    depends_on:
+    - queen-architect
+- id: disassembler
+  borg_name: Borg Disassembler
+  role: task_planner
+  agent: borg-disassembler
+  subagents: []
+  tasks:
+  - id: disassemble-to-small-tasks
+    title: Disassemble approved specs into small tasks
+    prompt: Convert the reviewed borg_cube_specs and generated base project files into small implementation_tasks. Each task must be focused, independently checkable, dependency-aware, and include a prompt that starts with <nano-implant>. Do not create tasks for scaffold files already returned in project_files unless follow-up work is required.
+    status: draft
+    depends_on:
+    - requirement-node
+- id: task-database
+  borg_name: Task Database Writer
+  role: task_persistence
+  agent: borg-disassembler
+  subagents: []
+  tasks:
+  - id: persist-implementation-tasks
+    title: Store implementation tasks in the database
+    prompt: Return implementation_tasks in JSON so Borg Universe can persist them as queued tasks assigned to borg-implementation-drone.
+    status: draft
+    depends_on:
+    - disassembler
+- id: implementation-drone
+  borg_name: Borg Implementation Drone
+  role: implementer
+  agent: borg-implementation-drone
+  subagents: []
+  tasks:
+  - id: execute-small-task
+    title: Execute queued implementation tasks
+    prompt: Execute exactly one queued implementation task at a time. The implementation prompt must start with <nano-implant>. Do not merge tasks or implement unlisted scope.
+    status: draft
+    depends_on: []
+- id: implementation-trigger
+  borg_name: Implementation Trigger
+  role: implementation_trigger
+  agent: borg-disassembler
+  subagents: []
+  tasks:
+  - id: trigger-implementation
+    title: Trigger stored implementation tasks
+    prompt: Select this stage to queue the stored implementation_tasks for borg-implementation-drone execution. Do not create new tasks and do not implement code in the parent workflow task.
+    status: draft
+    depends_on:
+    - task-database
+steps:
+- id: specification-phase
+  title: Project and module borg-cube specification
+  mode: sequential
+  nodes:
+  - queen-architect
+- id: review-phase
+  title: Requirement review and augmentation
+  mode: sequential
+  nodes:
+  - requirement-node
+  retry:
+    condition: nodes['requirement-node'].output.retry_required == true
+    max_attempts: 3
+    target_node: queen-architect
+    message: 'Requirement issues found. Correct the project and module borg_cube_specs based on this review: {{nodes[''requirement-node''].output.errors}}'
+- id: disassembly-phase
+  title: Disassemble specs into small implementation tasks
+  mode: sequential
+  nodes:
+  - disassembler
+- id: task-storage-phase
+  title: Store generated implementation tasks
+  mode: sequential
+  nodes:
+  - task-database
+- id: implementation-trigger-phase
+  title: Trigger implementation task execution
+  mode: sequential
+  nodes:
+  - implementation-trigger
+- id: implementation-phase
+  title: Implement queued tasks one by one
+  mode: sequential
+  nodes:
+  - implementation-drone

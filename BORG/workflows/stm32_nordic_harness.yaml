@@ -1,0 +1,142 @@
+id: stm32_nordic_harness
+title: STM32 Nordic Harness
+description: Embedded workflow for STM32 CubeMX/CubeIDE/CMake/Makefile projects and Nordic nRF52/nRF54 Zephyr/NCS projects. PlatformIO is optional fallback, not the default path.
+status: queued
+entry_node: embedded-intake
+nodes:
+  - id: embedded-intake
+    borg_name: Embedded Intake
+    role: coordinator
+    agent: borg-queen-architect
+    tasks:
+      - id: detect-embedded-family
+        title: Detect STM32 or Nordic target
+        prompt: Identify STM32 CubeMX/CubeIDE/CMake/Makefile projects and Nordic nRF52/nRF54 Zephyr/NCS projects from .ioc, CMakeLists.txt, Makefile, west.yml, prj.conf, board overlays, and toolchain files.
+        status: queued
+  - id: embedded-constraints
+    borg_name: Embedded Constraint Review
+    role: reviewer
+    agent: borg-requirement-node
+    tasks:
+      - id: hardware-contracts
+        title: Capture hardware contracts
+        prompt: Extract MCU, board, clocking, pin assignments, peripherals, interrupts, DMA, RTOS, timing, memory, power, bootloader, and safety constraints. Ask before assuming hardware behavior.
+        status: draft
+  - id: embedded-disassembly
+    borg_name: Embedded Task Disassembly
+    role: task_planner
+    agent: borg-disassembler
+    tasks:
+      - id: split-embedded-implants
+        title: Split embedded work into small implementation tasks
+        prompt: Produce small dependency-aware implementation_tasks. Each prompt must start with <nano-implant>, cover exactly one embedded change, and include build or unit-test verification.
+        status: draft
+  - id: implementation-trigger
+    borg_name: Implementation Trigger
+    role: implementation_trigger
+    agent: borg-disassembler
+    tasks:
+      - id: trigger-implementation
+        title: Queue approved embedded implementation tasks
+        prompt: Queue stored implementation_tasks for borg-implementation-drone. Do not implement in this parent task.
+        status: draft
+  - id: stm32-validation
+    borg_name: STM32 Validation Gates
+    role: verifier
+    agent: borg-cube-testing-node
+    tasks:
+      - id: stm32-cubemx-detected
+        title: STM32 CubeMX project detected
+        prompt: Record STM32CubeMX metadata when an .ioc file exists. Do not regenerate CubeMX output automatically.
+        only_if_path_exists: .
+        commands:
+          - id: list-ioc-files
+            run: python -c "import pathlib; print('\\n'.join(str(p) for p in pathlib.Path('.').rglob('*.ioc')))"
+            timeout_seconds: 60
+            allow_failure: true
+      - id: stm32-cmake-configure
+        title: STM32 CMake configure
+        prompt: Configure STM32 CMake projects when CMakeLists.txt exists.
+        only_if_path_exists: CMakeLists.txt
+        commands:
+          - id: stm32-cmake-configure
+            run: cmake -S . -B build -G Ninja
+            timeout_seconds: 900
+          - id: stm32-cmake-build
+            run: cmake --build build
+            timeout_seconds: 1800
+      - id: stm32-make-build
+        title: STM32 Makefile build
+        prompt: Build STM32CubeMX Makefile projects when Makefile exists.
+        only_if_path_exists: Makefile
+        commands:
+          - id: stm32-make
+            run: make -j
+            timeout_seconds: 1800
+  - id: nordic-validation
+    borg_name: Nordic nRF Validation Gates
+    role: verifier
+    agent: borg-cube-testing-node
+    tasks:
+      - id: nordic-west-build
+        title: Nordic Zephyr west build
+        prompt: Build Nordic nRF52/nRF54 Zephyr/NCS projects when west.yml exists.
+        only_if_path_exists: west.yml
+        commands:
+          - id: west-build
+            run: west build -b ${BOARD:-native_sim} .
+            timeout_seconds: 2400
+      - id: nordic-cmake-build
+        title: Nordic CMake build
+        prompt: Configure and build Nordic CMake applications when CMakeLists.txt exists but west.yml is not available.
+        only_if_path_exists: CMakeLists.txt
+        commands:
+          - id: nordic-cmake-configure
+            run: cmake -S . -B build -G Ninja
+            timeout_seconds: 900
+            allow_failure: true
+          - id: nordic-cmake-build
+            run: cmake --build build
+            timeout_seconds: 1800
+            allow_failure: true
+  - id: embedded-review
+    borg_name: Embedded Review
+    role: reviewer
+    agent: borg-requirement-node
+    tasks:
+      - id: review-embedded-output
+        title: Review embedded outputs
+        prompt: Review code changes, build logs, generated files, hardware safety risks, and commands needed for manual flashing. Never flash hardware automatically.
+        status: draft
+steps:
+  - id: intake-phase
+    title: Embedded target intake
+    mode: sequential
+    nodes:
+      - embedded-intake
+  - id: constraints-phase
+    title: Hardware and toolchain constraints
+    mode: sequential
+    nodes:
+      - embedded-constraints
+  - id: disassembly-phase
+    title: Embedded task disassembly
+    mode: sequential
+    nodes:
+      - embedded-disassembly
+  - id: implementation-trigger-phase
+    title: Trigger embedded implementation tasks
+    mode: sequential
+    nodes:
+      - implementation-trigger
+  - id: validation-phase
+    title: STM32 and Nordic deterministic validation
+    mode: sequential
+    nodes:
+      - stm32-validation
+      - nordic-validation
+  - id: review-phase
+    title: Human review handoff
+    mode: sequential
+    nodes:
+      - embedded-review

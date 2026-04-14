@@ -1,0 +1,102 @@
+id: python_tooling_harness
+title: Python Tooling Harness
+description: Pure Python workflow for helper tools, CLIs, libraries, automation, tests, packaging, and host-side scripts. Embedded toolchains and web UI work are out of scope unless explicitly requested.
+status: queued
+entry_node: python-intake
+nodes:
+  - id: python-intake
+    borg_name: Python Intake
+    role: coordinator
+    agent: borg-queen-architect
+    tasks:
+      - id: normalize-python-scope
+        title: Normalize pure Python scope
+        prompt: Identify Python package, CLI, script, test, or automation scope. Do not pull in PlatformIO, firmware build systems, or web UI work unless the user explicitly asks for them.
+        status: queued
+  - id: python-requirements
+    borg_name: Python Requirement Review
+    role: reviewer
+    agent: borg-requirement-node
+    tasks:
+      - id: python-contracts
+        title: Capture Python contracts
+        prompt: Extract CLI arguments, module APIs, input/output formats, error handling, packaging constraints, and test expectations.
+        status: draft
+  - id: python-disassembly
+    borg_name: Python Task Disassembly
+    role: task_planner
+    agent: borg-disassembler
+    tasks:
+      - id: split-python-implants
+        title: Split Python work into small implementation tasks
+        prompt: Produce small dependency-aware implementation_tasks. Each prompt must start with <nano-implant>, cover exactly one Python change, and include focused verification.
+        status: draft
+  - id: implementation-trigger
+    borg_name: Implementation Trigger
+    role: implementation_trigger
+    agent: borg-disassembler
+    tasks:
+      - id: trigger-implementation
+        title: Queue approved Python implementation tasks
+        prompt: Queue stored implementation_tasks for borg-implementation-drone. Do not implement in this parent task.
+        status: draft
+  - id: python-validation
+    borg_name: Python Validation Gates
+    role: verifier
+    agent: borg-cube-testing-node
+    tasks:
+      - id: python-tests
+        title: Python test suite
+        prompt: Run the repository Python test suite when tests exist.
+        only_if_path_exists: tests
+        commands:
+          - id: python-pytest
+            run: python -m pytest
+            timeout_seconds: 1200
+      - id: python-compile
+        title: Python import compilation
+        prompt: Compile Python sources when Python modules exist.
+        commands:
+          - id: compile-src
+            run: python -m compileall .
+            timeout_seconds: 300
+  - id: python-review
+    borg_name: Python Review
+    role: reviewer
+    agent: borg-requirement-node
+    tasks:
+      - id: review-python-output
+        title: Review Python outputs
+        prompt: Review code changes, command-gate logs, and remaining Python risks.
+        status: draft
+steps:
+  - id: intake-phase
+    title: Python scope intake
+    mode: sequential
+    nodes:
+      - python-intake
+  - id: constraints-phase
+    title: Python contracts
+    mode: sequential
+    nodes:
+      - python-requirements
+  - id: disassembly-phase
+    title: Python task disassembly
+    mode: sequential
+    nodes:
+      - python-disassembly
+  - id: implementation-trigger-phase
+    title: Trigger Python implementation tasks
+    mode: sequential
+    nodes:
+      - implementation-trigger
+  - id: validation-phase
+    title: Deterministic Python validation
+    mode: sequential
+    nodes:
+      - python-validation
+  - id: review-phase
+    title: Human review handoff
+    mode: sequential
+    nodes:
+      - python-review
