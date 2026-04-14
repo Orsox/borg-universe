@@ -64,6 +64,15 @@
                 {% endfor %}
               </select>
             </label>
+            {% if workflow_stage_options %}
+            <label>Next workflow stage
+              <select name="resume_stage_index">
+                {% for stage in workflow_stage_options %}
+                <option value="{{ stage.index }}" {% if stage.index == suggested_resume_stage_index %}selected{% endif %}>{{ stage.index + 1 }}. {{ stage.title }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            {% endif %}
             <label>Title
               <input name="title" value="{{ task.title or '' }}">
             </label>
@@ -87,6 +96,7 @@
           <div class="actions">
             <button type="submit">Save review</button>
             <button type="submit" name="action" value="confirm">Confirm and continue</button>
+            <button type="submit" name="action" value="start_implementation">Start implementation</button>
             <button type="submit" class="secondary" name="action" value="request_changes">Request changes</button>
           </div>
         </form>

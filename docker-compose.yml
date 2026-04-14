@@ -2,6 +2,10 @@ services:
   web:
     build:
       context: .
+      args:
+        INSTALL_ARM_GCC: ${INSTALL_ARM_GCC:-true}
+        INSTALL_EMBEDDED_PY_TOOLS: ${INSTALL_EMBEDDED_PY_TOOLS:-true}
+        INSTALL_PLATFORMIO: ${INSTALL_PLATFORMIO:-false}
     image: borg-universe:latest
     container_name: borg-universe
     ports:
@@ -17,6 +21,7 @@ services:
       BORG_ROOT: ${BORG_ROOT:-/app/BORG}
       AGENTS_ROOT: ${AGENTS_ROOT:-/app/agents}
       SKILLS_ROOT: ${SKILLS_ROOT:-/app/skills}
+      WORKFLOWS_ROOT: ${WORKFLOWS_ROOT:-/app/BORG/workflows}
       ARTIFACT_ROOT: ${ARTIFACT_ROOT:-/app/artifacts}
       MCP_SERVER_URL: ${MCP_SERVER_URL:-http://mcp:9000}
       SUPABASE_URL: ${SUPABASE_URL:-http://supabase-rest:3000}
@@ -50,6 +55,10 @@ services:
   mcp:
     build:
       context: .
+      args:
+        INSTALL_ARM_GCC: ${INSTALL_ARM_GCC:-true}
+        INSTALL_EMBEDDED_PY_TOOLS: ${INSTALL_EMBEDDED_PY_TOOLS:-true}
+        INSTALL_PLATFORMIO: ${INSTALL_PLATFORMIO:-false}
     image: borg-universe:latest
     container_name: borg-universe-mcp
     command: sh -c "uvicorn mcp_server.server:app --host 0.0.0.0 --port 9000"
@@ -63,6 +72,7 @@ services:
       BORG_ROOT: ${BORG_ROOT:-/app/BORG}
       AGENTS_ROOT: ${AGENTS_ROOT:-/app/agents}
       SKILLS_ROOT: ${SKILLS_ROOT:-/app/skills}
+      WORKFLOWS_ROOT: ${WORKFLOWS_ROOT:-/app/BORG/workflows}
       SUPABASE_URL: ${SUPABASE_URL:-http://supabase-rest:3000}
       SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlLWxvY2FsLWRldiIsImlhdCI6MTczNTY4OTYwMCwiZXhwIjo0MTAyNDQ0ODAwfQ.b0GjcWDNzpg-2bV9HUT1WSyeYZO9nbeXLhZCJqCPST8}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UtbG9jYWwtZGV2IiwiaWF0IjoxNzM1Njg5NjAwLCJleHAiOjQxMDI0NDQ4MDB9.BbY6G10B6UChkgQZ7EFDc5dTzPvQ7gKPKaKQ-U1zvpY}
@@ -91,6 +101,10 @@ services:
   worker:
     build:
       context: .
+      args:
+        INSTALL_ARM_GCC: ${INSTALL_ARM_GCC:-true}
+        INSTALL_EMBEDDED_PY_TOOLS: ${INSTALL_EMBEDDED_PY_TOOLS:-true}
+        INSTALL_PLATFORMIO: ${INSTALL_PLATFORMIO:-false}
     image: borg-universe:latest
     container_name: borg-universe-worker
     command: python -m app.worker
@@ -102,11 +116,14 @@ services:
       BORG_ROOT: ${BORG_ROOT:-/app/BORG}
       AGENTS_ROOT: ${AGENTS_ROOT:-/app/agents}
       SKILLS_ROOT: ${SKILLS_ROOT:-/app/skills}
+      WORKFLOWS_ROOT: ${WORKFLOWS_ROOT:-/app/BORG/workflows}
       ARTIFACT_ROOT: ${ARTIFACT_ROOT:-/app/artifacts}
       MCP_SERVER_URL: ${MCP_SERVER_URL:-http://mcp:9000}
       WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-5}
       WORKER_BATCH_SIZE: ${WORKER_BATCH_SIZE:-4}
+      WORKER_RUNNING_TASK_TIMEOUT_SECONDS: ${WORKER_RUNNING_TASK_TIMEOUT_SECONDS:-900}
       CLAUDE_EXECUTABLE: ${CLAUDE_EXECUTABLE:-claude}
+      CLAUDE_PERMISSION_MODE: ${CLAUDE_PERMISSION_MODE:-bypassPermissions}
       CLAUDE_PROJECT_ROOT: ${CLAUDE_PROJECT_ROOT:-/app}
       WORKBENCH_HOST_ROOT: ${WORKBENCH_HOST_ROOT:-D:\Workbench}
       WORKBENCH_CONTAINER_ROOT: ${WORKBENCH_CONTAINER_ROOT:-/workbench}

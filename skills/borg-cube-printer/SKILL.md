@@ -17,6 +17,8 @@ It must be:
 - testable
 - maintainable
 
+For the `new_borg_cube_project` workflow, the root `borg-cube.md` is both a stored database spec and a materialized project file. Module specs should also be materialized under safe relative module paths such as `src/package/borg-cube.md` or `module-name/borg-cube.md`.
+
 ## Required section structure
 
 < Use the reference/borg-cube-template.md file >
@@ -35,6 +37,20 @@ It must be:
 12. External API / request-response schema if applicable
 13. Error handling expectations if applicable
 14. Assumptions / open points if evidence is incomplete
+
+## New project output
+
+When the caller is creating a new Borg Cube project:
+
+- Set `materialize_borg_cube_files` to `true`
+- Return `borg_cube_specs` for the project and modules
+- Return `project_files` for the smallest useful scaffold when the target project is empty
+- Ensure the root `borg-cube.md` contains the canonical sections from this skill
+- Include traceable `FR-*` functional requirements and `NFR-*` non-functional requirements
+- Use relative paths only
+- Keep scaffold files text-only and directly relevant to the selected project type
+- Prefer pure Python scaffolds for Python tooling requests
+- Do not add embedded build systems unless the request is explicitly embedded
 
 ## Writing rules
 

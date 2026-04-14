@@ -38,6 +38,7 @@ def test_project_search_aggregates_context_sources() -> None:
             "code_examples": [{"id": "e1", "title": "Example", "code": "SPI", "platform": "STM32"}],
             "tasks": [{"id": "t1", "title": "SPI task", "description": "", "topic": "SPI"}],
             "projects": [{"id": "p1", "name": "SPI Project", "description": "", "project_directory": "", "active": True}],
+            "project_specs": [{"id": "s1", "spec_path": "borg-cube.md", "title": "SPI Spec", "content": "SPI module"}],
         }
     )
 
@@ -49,6 +50,7 @@ def test_project_search_aggregates_context_sources() -> None:
         "rules": 1,
         "examples": 1,
         "tasks": 1,
+        "specs": 1,
     }
 
 

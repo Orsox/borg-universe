@@ -9,7 +9,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.api.router import api_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
-from app.db.repositories import ProjectRepository, TaskRepository
+from app.db.repositories import ProjectRepository, ProjectSpecRepository, TaskRepository
 from app.db.supabase_client import SupabaseRestClient, SupabaseRestError
 from app.models.projects import PROJECT_TYPES, ProjectCreate
 from app.services.orchestration_settings_store import OrchestrationSettingsStore
@@ -66,6 +66,7 @@ def create_app() -> FastAPI:
 
         processed_task_count = sum(1 for task in tasks if task.get("status") in {"done", "review_required"})
         active_task_count = sum(1 for task in tasks if task.get("status") == "running")
+        needs_input_tasks = _ordered_attention_tasks(tasks, "needs_input")
         review_tasks = [task for task in tasks if task.get("status") == "review_required"][:5]
         return templates.TemplateResponse(
             request,
@@ -83,11 +84,15 @@ def create_app() -> FastAPI:
                 "project_count": len(projects),
                 "processed_task_count": processed_task_count,
                 "active_task_count": active_task_count,
+                "needs_input_count": len(needs_input_tasks),
+                "current_input_task": needs_input_tasks[0] if needs_input_tasks else None,
+                "next_input_tasks": needs_input_tasks[1:5],
                 "review_required_count": len(review_tasks),
                 "review_tasks": review_tasks,
                 "task_error": task_error,
                 "project_types": PROJECT_TYPES,
                 "project_error": project_error,
+                "auto_refresh_seconds": 10,
                 "agent_system": (
                     orchestration.agent_selection.agent_system.replace("_", " ").title()
                     if orchestration
@@ -161,11 +166,25 @@ def create_app() -> FastAPI:
 
     @app.post("/projects/{project_id}/delete", tags=["system"])
     async def delete_project(project_id: str) -> RedirectResponse:
-        repo = ProjectRepository(SupabaseRestClient(settings))
+        client = SupabaseRestClient(settings)
+        repo = ProjectRepository(client)
         try:
             project = repo.get_project(project_id)
             if not project:
                 raise StarletteHTTPException(status_code=404, detail="Project not found")
+            task_repo = TaskRepository(client)
+            task_ids = [task["id"] for task in task_repo.list_for_project(project_id)]
+            for task_id in task_ids:
+                client.request("DELETE", "task_events", query={"task_id": f"eq.{task_id}"}, prefer="return=minimal")
+                client.request("DELETE", "artifacts", query={"task_id": f"eq.{task_id}"}, prefer="return=minimal")
+            task_repo.delete_for_project(project_id)
+            ProjectSpecRepository(client).delete_for_project(project_id)
+            client.request(
+                "DELETE",
+                "mcp_access_logs",
+                query={"project_id": f"eq.{project_id}"},
+                prefer="return=minimal",
+            )
             deleted = repo.delete_project(project_id)
         except SupabaseRestError as exc:
             raise StarletteHTTPException(status_code=503, detail=str(exc)) from exc
@@ -192,6 +211,11 @@ def _optional(value: str | None) -> str | None:
         return None
     value = value.strip()
     return value or None
+
+
+def _ordered_attention_tasks(tasks: list[dict], status_value: str) -> list[dict]:
+    selected = [task for task in tasks if task.get("status") == status_value]
+    return sorted(selected, key=lambda task: str(task.get("updated_at") or task.get("created_at") or ""))
 
 
 app = create_app()

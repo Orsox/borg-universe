@@ -166,6 +166,36 @@ create table if not exists public.task_events (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.project_specs (
+  id uuid primary key default extensions.gen_random_uuid(),
+  project_id text not null,
+  spec_path text not null,
+  spec_type text not null default 'module' check (spec_type in ('project', 'module', 'task', 'handoff')),
+  module_name text,
+  title text not null default '',
+  summary text not null default '',
+  content text not null,
+  source text not null default 'borg-cube',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (project_id, spec_path)
+);
+
+alter table public.project_specs
+add column if not exists spec_type text not null default 'module';
+
+alter table public.project_specs
+add column if not exists module_name text;
+
+alter table public.project_specs
+add column if not exists title text not null default '';
+
+alter table public.project_specs
+add column if not exists summary text not null default '';
+
+alter table public.project_specs
+add column if not exists source text not null default 'borg-cube';
+
 create or replace function public.set_updated_at()
 returns trigger
 language plpgsql
@@ -182,13 +212,21 @@ before update on public.tasks
 for each row
 execute function public.set_updated_at();
 
+drop trigger if exists project_specs_set_updated_at on public.project_specs;
+create trigger project_specs_set_updated_at
+before update on public.project_specs
+for each row
+execute function public.set_updated_at();
+
 create index if not exists idx_tasks_status_created_at on public.tasks(status, created_at desc);
 create index if not exists idx_tasks_workflow_id on public.tasks(workflow_id);
 create index if not exists idx_task_events_task_id_created_at on public.task_events(task_id, created_at asc);
+create index if not exists idx_project_specs_project_id on public.project_specs(project_id);
 
 alter table public.tasks enable row level security;
 alter table public.task_events enable row level security;
 alter table public.projects enable row level security;
+alter table public.project_specs enable row level security;
 
 drop policy if exists "anon can read projects" on public.projects;
 create policy "anon can read projects"
@@ -229,11 +267,26 @@ to service_role
 using (true)
 with check (true);
 
+drop policy if exists "anon can read project specs" on public.project_specs;
+create policy "anon can read project specs"
+on public.project_specs for select
+to anon
+using (true);
+
+drop policy if exists "service role manages project specs" on public.project_specs;
+create policy "service role manages project specs"
+on public.project_specs for all
+to service_role
+using (true)
+with check (true);
+
 grant select on public.tasks to anon, authenticated;
 grant select on public.task_events to anon, authenticated;
 grant select on public.projects to anon, authenticated;
+grant select on public.project_specs to anon, authenticated;
 grant all privileges on public.tasks to service_role;
 grant all privileges on public.task_events to service_role;
 grant all privileges on public.projects to service_role;
+grant all privileges on public.project_specs to service_role;
 
 notify pgrst, 'reload schema';

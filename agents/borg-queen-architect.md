@@ -39,9 +39,11 @@ This agent **requires** a feature description as input. The caller must provide:
 ## Responsibilities
 
 - Accept a feature description and transform it into a structured `borg-cube.md` specification.
-- Initialize `borg-cube.md` using the canonical template (via `borg-cube-printer` skill) if it doesn't exist.
-- Update an existing `borg-cube.md` if one already exists and the input refines or extends it.
-- Read and fully understand `borg-cube.md` before producing any architectural output.
+- Create a project-level `borg-cube.md` spec that describes the project at a coarse level and lists all module specs beneath it.
+- Create one module-level `borg-cube.md` spec per relevant module. Each module spec must briefly explain the module's available capabilities, contracts, and boundaries.
+- Treat the project database as the normal storage target for specs. Do not write `borg-cube.md` files unless the caller explicitly requests materialization or the workflow is `new_borg_cube_project`.
+- For `new_borg_cube_project`, create the smallest appropriate base project scaffold in `project_files` when the target directory is empty or missing core project files.
+- Return all specs as `borg_cube_specs` JSON objects so Borg Universe can persist them in the database.
 - Plan module and directory structure.
 - Define interfaces, abstractions, and contracts between components.
 - Identify dependencies and integration points.
@@ -77,24 +79,84 @@ This agent **requires** a feature description as input. The caller must provide:
 
 ## Output Format
 
-Produce an `architecture.md` containing:
+Return compact JSON containing:
 
-### 1. Overview
-- Purpose and scope of the feature/system
+```json
+{
+  "summary": "...",
+  "first_node_id": "requirement-node",
+  "borg_cube_specs": [
+    {
+      "spec_path": "borg-cube.md",
+      "spec_type": "project",
+      "title": "Project name",
+      "summary": "Coarse project description.",
+      "content": "# Project borg-cube\\n..."
+    },
+    {
+      "spec_path": "module-name/borg-cube.md",
+      "spec_type": "module",
+      "module_name": "module-name",
+      "title": "Module name",
+      "summary": "Available capabilities.",
+      "content": "# Module borg-cube\\n..."
+    }
+  ],
+  "materialize_borg_cube_files": false,
+  "project_files": [
+    {
+      "path": "README.md",
+      "content": "# Project name\\n\\n..."
+    }
+  ],
+  "delegated_agents": ["borg-queen-architect"],
+  "verification": "..."
+}
+```
 
-### 2. Module Structure
-- Directory layout with responsibilities per module
+`materialize_borg_cube_files` must be `false` unless the user explicitly asks to write the database specs back to files or the workflow is `new_borg_cube_project`.
 
-### 3. Interfaces & Contracts
+For `new_borg_cube_project`, set `materialize_borg_cube_files` to `true` and return `project_files` for a minimal scaffold when needed. `project_files` must use safe relative paths only. Do not include `.git`, `.venv`, generated caches, absolute paths, or binary content.
+
+The project `borg-cube.md` content must include:
+
+### 1. Metadata
+- Project name, status, owner if known, target project path, and last updated date
+
+### 2. Goal
+- Purpose and intended outcome
+
+### 3. Problem Statement
+- Concrete problem, users, and current pain points
+
+### 4. Scope
+- In scope and out of scope boundaries
+
+### 5. Dependencies
+- Internal and external dependencies with contracts or assumptions
+
+### 6. Submodules / Internal Structure
+- List of module spec paths and one-line responsibility per module
+
+### 7. Functional Requirements
+- Atomic, testable FR-* requirements
+
+### 8. Non-Functional Requirements
+- Atomic, measurable NFR-* requirements
+
+### 9. Constraints
+- Technical, platform, runtime, and process constraints
+
+### 10. Interfaces
 - Public API definitions, data types, error handling expectations
 
-### 4. Dependency Map
-- Internal and external dependencies
+### 11. Error Handling
+- Failure modes, validation behavior, and user-visible error expectations
 
-### 5. Architecture Decisions
+### 12. Architecture Decisions
 - Key decisions with rationale and rejected alternatives
 
-### 6. Open Questions / Risks
+### 13. Assumptions / Open Points
 - Unresolved ambiguities or risks requiring clarification
 
 ---

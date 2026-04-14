@@ -90,7 +90,7 @@
           <td><span class="badge {{ 'done' if task.pycharm_mcp_enabled else 'queued' }}">{{ "yes" if task.pycharm_mcp_enabled else "no" }}</span></td>
           <td>{{ task.updated_at or "" }}</td>
           <td>
-            {% if task.status == "review_required" %}
+            {% if task.status in ["review_required", "needs_input"] %}
             <a class="button secondary" href="/tasks/{{ task.id }}/review">Review</a>
             {% else %}
             <form class="inline-form" method="post" action="/tasks/{{ task.id }}/queue">

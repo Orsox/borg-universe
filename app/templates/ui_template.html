@@ -613,5 +613,20 @@
       </main>
     </div>
   </div>
+  {% if auto_refresh_seconds %}
+  <script>
+    (function () {
+      const refreshSeconds = Number("{{ auto_refresh_seconds }}");
+      if (!Number.isFinite(refreshSeconds) || refreshSeconds <= 0) {
+        return;
+      }
+      window.setTimeout(function () {
+        if (document.visibilityState === "visible") {
+          window.location.reload();
+        }
+      }, refreshSeconds * 1000);
+    })();
+  </script>
+  {% endif %}
 </body>
 </html>

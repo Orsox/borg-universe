@@ -68,6 +68,9 @@ class FakeSupabaseClient:
             if value.startswith("eq."):
                 expected = value[3:]
                 filtered = [row for row in filtered if str(row.get(key)).lower() == expected.lower()]
+            elif value.startswith("lt."):
+                expected = value[3:]
+                filtered = [row for row in filtered if str(row.get(key, "")) < expected]
             elif value.startswith("ilike.*") and value.endswith("*"):
                 needle = value[7:-1].lower()
                 filtered = [row for row in filtered if needle in str(row.get(key, "")).lower()]

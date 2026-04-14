@@ -82,6 +82,16 @@
                 <span class="badge {{ task.status|badge_class }}">{{ task.status }}</span>
                 <strong>{{ task.title }}</strong>
                 {% if task.prompt %}<p>{{ task.prompt }}</p>{% endif %}
+                {% if task.command %}
+                <p><strong>Gate:</strong> <code>{{ task.command.run if task.command.run is defined else task.command }}</code></p>
+                {% endif %}
+                {% if task.commands %}
+                <ul>
+                  {% for command in task.commands %}
+                  <li><code>{{ command.run if command.run is defined else command }}</code></li>
+                  {% endfor %}
+                </ul>
+                {% endif %}
               </li>
               {% else %}
               <li class="muted">No tasks assigned.</li>

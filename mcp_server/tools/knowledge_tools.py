@@ -81,6 +81,16 @@ def project_search(client: SupabaseRestClient, arguments: dict[str, Any]) -> dic
         "projects",
         query={"select": "*", "limit": str(_limit(arguments)), "order": "name.asc", "active": "eq.true"},
     )
+    try:
+        specs = client.request(
+            "GET",
+            "project_specs",
+            query={"select": "*", "limit": str(_limit(arguments)), "order": "spec_path.asc"},
+        )
+    except SupabaseRestError as exc:
+        if exc.status_code != 404:
+            raise
+        specs = []
     text_query = _clean(arguments.get("query"))
     if text_query:
         tasks = [
@@ -100,7 +110,15 @@ def project_search(client: SupabaseRestClient, arguments: dict[str, Any]) -> dic
                 f"{project.get('default_board', '')} {project.get('default_topic', '')}"
             ).lower()
         ]
-    return {"projects": projects, "knowledge": knowledge, "rules": rules, "examples": examples, "tasks": tasks}
+        specs = [
+            spec for spec in specs
+            if text_query.lower() in (
+                f"{spec.get('spec_path', '')} {spec.get('spec_type', '')} "
+                f"{spec.get('module_name', '')} {spec.get('title', '')} "
+                f"{spec.get('summary', '')} {spec.get('content', '')}"
+            ).lower()
+        ]
+    return {"projects": projects, "specs": specs, "knowledge": knowledge, "rules": rules, "examples": examples, "tasks": tasks}
 
 
 def optional_table_list(client: SupabaseRestClient, table: str) -> list[dict[str, Any]]:

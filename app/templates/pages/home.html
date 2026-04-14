@@ -56,7 +56,56 @@
         <dl class="detail-list">
           <dt>Processed</dt><dd>{{ processed_task_count }}</dd>
           <dt>Active</dt><dd>{{ active_task_count }}</dd>
+          <dt>Needs input</dt><dd>{{ needs_input_count }}</dd>
         </dl>
+      </div>
+    </section>
+
+    <section class="section panel">
+      <div class="panel-header">
+        <h2>Input required</h2>
+        <span class="badge review_required">{{ needs_input_count }}</span>
+      </div>
+      <div class="panel-body">
+        {% if current_input_task %}
+        <article class="workflow-node">
+          <div class="workflow-node-header">
+            <div>
+              <h3><a href="/tasks/{{ current_input_task.id }}/review">{{ current_input_task.title }}</a></h3>
+              <p class="summary">{{ current_input_task.description }}</p>
+            </div>
+            <span class="badge review_required">current</span>
+          </div>
+          <dl class="workflow-node-meta">
+            <dt>Project</dt><dd>{{ current_input_task.project_id or "" }}</dd>
+            <dt>Updated</dt><dd>{{ current_input_task.updated_at or current_input_task.created_at or "" }}</dd>
+            <dt>Path</dt><dd>{{ current_input_task.local_path or "" }}</dd>
+          </dl>
+          <div class="actions">
+            <a class="button" href="/tasks/{{ current_input_task.id }}/review">Provide input</a>
+            <a class="button secondary" href="/tasks/{{ current_input_task.id }}">Open history</a>
+          </div>
+        </article>
+        {% if next_input_tasks %}
+        <ol class="timeline" style="margin-top: 16px;">
+          {% for task in next_input_tasks %}
+          <li class="timeline-item">
+            <time class="timeline-time">{{ loop.index + 1 }}</time>
+            <div>
+              <h3><a href="/tasks/{{ task.id }}/review">{{ task.title }}</a></h3>
+              <p>{{ task.description }}</p>
+              <p class="muted">{{ task.updated_at or task.created_at or "" }}</p>
+            </div>
+          </li>
+          {% endfor %}
+        </ol>
+        {% endif %}
+        {% else %}
+        <div class="empty">
+          <strong>No tasks waiting for input</strong>
+          <p>Tasks that need a decision, missing context, or corrected project data appear here first.</p>
+        </div>
+        {% endif %}
       </div>
     </section>
 

@@ -9,6 +9,18 @@ WorkflowMode = Literal["sequential", "parallel"]
 WorkflowStatus = Literal["draft", "queued", "running", "needs_input", "review_required", "done", "failed"]
 
 
+class WorkflowCommand(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: str | None = None
+    run: str = Field(min_length=1)
+    working_dir: str | None = None
+    timeout_seconds: int | None = Field(default=None, ge=1)
+    allow_failure: bool = False
+    only_if_path_exists: str | None = None
+    env: dict[str, str] = Field(default_factory=dict)
+
+
 class WorkflowTask(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -17,6 +29,13 @@ class WorkflowTask(BaseModel):
     prompt: str = ""
     status: WorkflowStatus = "draft"
     depends_on: list[str] = Field(default_factory=list)
+    command: str | WorkflowCommand | None = None
+    commands: list[str | WorkflowCommand] = Field(default_factory=list)
+    working_dir: str | None = None
+    timeout_seconds: int | None = Field(default=None, ge=1)
+    allow_failure: bool = False
+    only_if_path_exists: str | None = None
+    env: dict[str, str] = Field(default_factory=dict)
 
 
 class WorkflowNode(BaseModel):

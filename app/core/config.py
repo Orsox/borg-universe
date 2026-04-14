@@ -33,6 +33,7 @@ class Settings:
     mcp_server_url: str | None
     worker_poll_interval_seconds: float
     worker_batch_size: int
+    worker_running_task_timeout_seconds: float = 900.0
 
     @property
     def supabase_configured(self) -> bool:
@@ -58,4 +59,5 @@ def get_settings() -> Settings:
         mcp_server_url=os.getenv("MCP_SERVER_URL") or None,
         worker_poll_interval_seconds=float(os.getenv("WORKER_POLL_INTERVAL_SECONDS", "5")),
         worker_batch_size=int(os.getenv("WORKER_BATCH_SIZE", "4")),
+        worker_running_task_timeout_seconds=float(os.getenv("WORKER_RUNNING_TASK_TIMEOUT_SECONDS", "900")),
     )

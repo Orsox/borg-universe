@@ -46,6 +46,44 @@ class ProjectRepository:
         return True
 
 
+class ProjectSpecRepository:
+    def __init__(self, client: SupabaseRestClient) -> None:
+        self.client = client
+
+    def list_for_project(self, project_id: str) -> list[dict[str, Any]]:
+        return self.client.request(
+            "GET",
+            "project_specs",
+            query={"select": "*", "project_id": f"eq.{project_id}", "order": "spec_path.asc"},
+        )
+
+    def upsert_spec(self, spec: dict[str, Any]) -> dict[str, Any]:
+        rows = self.client.request(
+            "POST",
+            "project_specs",
+            query={"select": "*", "on_conflict": "project_id,spec_path"},
+            body=spec,
+            prefer="resolution=merge-duplicates,return=representation",
+        )
+        return rows[0]
+
+    def upsert_specs(self, specs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not specs:
+            return []
+        return [
+            self.upsert_spec(spec)
+            for spec in specs
+        ]
+
+    def delete_for_project(self, project_id: str) -> None:
+        self.client.request(
+            "DELETE",
+            "project_specs",
+            query={"project_id": f"eq.{project_id}"},
+            prefer="return=minimal",
+        )
+
+
 class TaskRepository:
     def __init__(self, client: SupabaseRestClient) -> None:
         self.client = client
@@ -75,6 +113,46 @@ class TaskRepository:
                 "order": "created_at.asc",
                 "limit": str(limit),
             },
+        )
+
+    def list_stale_running(self, updated_before_iso: str, limit: int = 10) -> list[dict[str, Any]]:
+        return self.client.request(
+            "GET",
+            "tasks",
+            query={
+                "select": "*",
+                "status": "eq.running",
+                "updated_at": f"lt.{updated_before_iso}",
+                "order": "updated_at.asc",
+                "limit": str(limit),
+            },
+        )
+
+    def list_for_project(self, project_id: str) -> list[dict[str, Any]]:
+        return self.client.request(
+            "GET",
+            "tasks",
+            query={"select": "*", "project_id": f"eq.{project_id}", "order": "created_at.asc"},
+        )
+
+    def list_child_implementation_tasks(self, parent_task_id: str) -> list[dict[str, Any]]:
+        return self.client.request(
+            "GET",
+            "tasks",
+            query={
+                "select": "*",
+                "assigned_agent": "eq.borg-implementation-drone",
+                "description": f"ilike.*Parent task: {parent_task_id}*",
+                "order": "created_at.asc",
+            },
+        )
+
+    def delete_for_project(self, project_id: str) -> None:
+        self.client.request(
+            "DELETE",
+            "tasks",
+            query={"project_id": f"eq.{project_id}"},
+            prefer="return=minimal",
         )
 
     def create_task(self, task: TaskCreate, initial_status: TaskStatus = "queued") -> dict[str, Any]:

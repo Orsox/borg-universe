@@ -51,7 +51,7 @@ Then generate and maintain a task structure that allows downstream agents to:
 Convert the available specification into:
 
 - a readable task inventory
-- small task files with clear scope
+- small database-ready implementation tasks with clear scope
 - dependency-aware execution order
 - explicit acceptance criteria
 - visible blockers and open questions
@@ -120,13 +120,23 @@ Identify architectural areas and derive task units.
 Determine ordering between tasks and document dependencies.
 
 ### Phase 4 — Write Task Artifacts
-Create or update:
+Create or update task artifacts only when file materialization is explicitly requested. The normal output is JSON for database persistence:
 
-- task-index.md
-- backlog.md
-- execution-rules.md
-- task files
-- review files
+```json
+{
+  "summary": "...",
+  "implementation_tasks": [
+    {
+      "title": "Small focused task",
+      "prompt": "<nano-implant> Implement exactly one narrow change.",
+      "depends_on": [],
+      "acceptance_criteria": ["..."],
+      "spec_refs": ["borg-cube.md", "module-a/borg-cube.md"]
+    }
+  ],
+  "verification": "..."
+}
+```
 
 ### Phase 5 — Normalize and Review
 Ensure consistency, stable IDs, reasonable task sizes, and explicit acceptance criteria.
@@ -172,6 +182,8 @@ high
 
 ## Goal
 Short description of what must be achieved.
+
+For database tasks, the `prompt` field is mandatory and must start with `<nano-implant>`.
 
 ## Inputs
 - borg-cube.md
@@ -230,6 +242,7 @@ T003-hal-interface.md
 Task decomposition is acceptable only if:
 
 - tasks are small and focused
+- every task is small enough for one implementation-agent run
 - dependencies are coherent
 - outputs are concrete
 - acceptance criteria are testable

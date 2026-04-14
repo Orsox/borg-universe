@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -76,8 +77,9 @@ def test_claude_code_client_invokes_cli_with_local_model_environment(tmp_path: P
     result = client.send_prompt("Plan the task.")
 
     assert result["content"] == "Claude delegated the task."
-    assert calls[0]["args"][:6] == ["claude", "--bare", "--no-session-persistence", "-p", "Plan the task.", "--model"]
-    assert calls[0]["args"][6] == "borg-cpu"
+    assert calls[0]["args"][:4] == ["claude", "--bare", "--no-session-persistence", "--dangerously-skip-permissions"]
+    assert calls[0]["args"][4:7] == ["-p", "Plan the task.", "--model"]
+    assert calls[0]["args"][7] == "borg-cpu"
     assert calls[0]["kwargs"]["cwd"] == str(project_root)
     assert calls[0]["kwargs"]["env"]["ANTHROPIC_BASE_URL"] == "http://host.docker.internal:12345"
     assert calls[0]["kwargs"]["env"]["OPENAI_BASE_URL"] == "http://host.docker.internal:12345/v1"
@@ -120,10 +122,76 @@ def test_claude_code_client_passes_mcp_config_to_cli(tmp_path: Path) -> None:
 
     client.send_prompt("Plan the task.")
 
+    assert calls[0]["args"][0:4] == ["claude", "--bare", "--no-session-persistence", "--dangerously-skip-permissions"]
+    assert calls[0]["args"][4:6] == ["--mcp-config", mcp_config_json]
+    assert calls[0]["args"][6:9] == ["-p", "Plan the task.", "--model"]
+    assert calls[0]["args"][9] == "borg-cpu"
+
+
+def test_claude_code_client_uses_safe_permission_mode_when_running_as_root(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / "project"
+    agents_root = project_root / "agents"
+    skills_root = project_root / "skills"
+    agents_root.mkdir(parents=True)
+    skills_root.mkdir()
+    settings = _settings(tmp_path, agents_root, skills_root)
+    calls: list[dict] = []
+
+    def runner(*args, **kwargs):
+        calls.append({"args": args[0], "kwargs": kwargs})
+        return subprocess.CompletedProcess(args[0], 0, stdout="{}", stderr="")
+
+    monkeypatch.setenv("CLAUDE_PERMISSION_MODE", "bypassPermissions")
+    monkeypatch.setattr(os, "geteuid", lambda: 0, raising=False)
+    client = ClaudeCodeClient(
+        settings=settings,
+        orchestration=OrchestrationSettings(),
+        workspace=ClaudeCodeWorkspace(
+            project_root=project_root,
+            agents_source=agents_root,
+            skills_source=skills_root,
+            global_claude_root=tmp_path / "home" / ".claude",
+        ),
+        runner=runner,
+    )
+
+    client.send_prompt("Plan the task.")
+
+    assert "--dangerously-skip-permissions" not in calls[0]["args"]
     assert calls[0]["args"][0:3] == ["claude", "--bare", "--no-session-persistence"]
-    assert calls[0]["args"][3:5] == ["--mcp-config", mcp_config_json]
+    assert calls[0]["args"][3:5] == ["--permission-mode", "acceptEdits"]
     assert calls[0]["args"][5:8] == ["-p", "Plan the task.", "--model"]
-    assert calls[0]["args"][8] == "borg-cpu"
+
+
+def test_claude_code_client_supports_configurable_permission_mode(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / "project"
+    agents_root = project_root / "agents"
+    skills_root = project_root / "skills"
+    agents_root.mkdir(parents=True)
+    skills_root.mkdir()
+    settings = _settings(tmp_path, agents_root, skills_root)
+    calls: list[dict] = []
+
+    def runner(*args, **kwargs):
+        calls.append({"args": args[0], "kwargs": kwargs})
+        return subprocess.CompletedProcess(args[0], 0, stdout="{}", stderr="")
+
+    monkeypatch.setenv("CLAUDE_PERMISSION_MODE", "acceptEdits")
+    client = ClaudeCodeClient(
+        settings=settings,
+        orchestration=OrchestrationSettings(),
+        workspace=ClaudeCodeWorkspace(
+            project_root=project_root,
+            agents_source=agents_root,
+            skills_source=skills_root,
+            global_claude_root=tmp_path / "home" / ".claude",
+        ),
+        runner=runner,
+    )
+
+    client.send_prompt("Plan the task.")
+
+    assert calls[0]["args"][0:5] == ["claude", "--bare", "--no-session-persistence", "--permission-mode", "acceptEdits"]
 
 
 def test_claude_code_client_defaults_to_ten_minute_timeout(tmp_path: Path, monkeypatch) -> None:

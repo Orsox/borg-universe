@@ -184,6 +184,7 @@ class ClaudeCodeClient:
             "--bare",
             "--no-session-persistence",
         ]
+        _append_permission_args(command)
         if self.mcp_config_json:
             command.extend(["--mcp-config", self.mcp_config_json])
         command.extend([
@@ -202,6 +203,7 @@ class ClaudeCodeClient:
             "--bare",
             "--no-session-persistence",
         ]
+        _append_permission_args(command)
         if self.mcp_config_json:
             command.extend(["--mcp-config", "<mcp-config>"])
         command.extend([
@@ -230,6 +232,27 @@ def _infer_project_root(settings: Settings) -> Path:
         return borg_root.parent
 
     return Path.cwd().resolve()
+
+
+def _can_bypass_permissions_as_current_user() -> bool:
+    geteuid = getattr(os, "geteuid", None)
+    if geteuid is None:
+        return True
+    return geteuid() != 0
+
+
+def _append_permission_args(command: list[str]) -> None:
+    permission_mode = os.getenv("CLAUDE_PERMISSION_MODE", "bypassPermissions").strip()
+    if permission_mode == "bypassPermissions":
+        if _can_bypass_permissions_as_current_user():
+            command.append("--dangerously-skip-permissions")
+        else:
+            root_permission_mode = os.getenv("CLAUDE_ROOT_PERMISSION_MODE", "acceptEdits").strip()
+            if root_permission_mode:
+                command.extend(["--permission-mode", root_permission_mode])
+        return
+    if permission_mode:
+        command.extend(["--permission-mode", permission_mode])
 
 
 def _parse_json_object(value: str) -> dict[str, Any]:

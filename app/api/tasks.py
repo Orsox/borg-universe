@@ -309,6 +309,8 @@ async def review_task(
     llm_review = _latest_llm_review(events)
     llm_transcript = _build_llm_transcript(events)
     llm_human_output = _latest_llm_human_output(events, llm_transcript, llm_review)
+    workflow_stage_options = _workflow_stage_options(workflow_store, task.get("workflow_id"))
+    suggested_resume_stage_index = _next_resume_stage_index(repo, workflow_store, task_id, events)
 
     return templates.TemplateResponse(
         request,
@@ -328,9 +330,12 @@ async def review_task(
             "review_actions": [
                 {"value": "save", "label": "Save review"},
                 {"value": "confirm", "label": "Confirm and continue"},
+                {"value": "start_implementation", "label": "Start implementation"},
                 {"value": "request_changes", "label": "Request changes"},
                 {"value": "cancel", "label": "Cancel task"},
             ],
+            "workflow_stage_options": workflow_stage_options,
+            "suggested_resume_stage_index": suggested_resume_stage_index,
             "detail_fields": [
                 ("Project", "project_id"),
                 ("Workflow", "workflow_id"),
@@ -387,14 +392,19 @@ async def submit_task_review(
             {"notes": review_notes},
         )
 
-    if action == "confirm":
+    if action in {"confirm", "start_implementation"}:
         repo.add_event(
             task_id,
             "review_confirmed",
             "Review confirmed; task will continue through the workflow chain.",
-            {"notes": review_notes, "changes": updates},
+            {"notes": review_notes, "changes": updates, "action": action},
         )
-        resume_stage_index = _next_resume_stage_index(repo, workflow_store, task_id, events)
+        if action == "start_implementation":
+            resume_stage_index = _implementation_trigger_stage_index(workflow_store, task_id, repo)
+        else:
+            resume_stage_index = _selected_resume_stage_index(form, workflow_store, task_id, repo)
+            if resume_stage_index is None:
+                resume_stage_index = _next_resume_stage_index(repo, workflow_store, task_id, events)
         if resume_stage_index is None:
             repo.add_event(
                 task_id,
@@ -407,12 +417,13 @@ async def submit_task_review(
         repo.add_event(
             task_id,
             "workflow_resumed",
-            "Review completed; implementation begins and the workflow chain resumes.",
+            "Review completed; the selected workflow stage is queued.",
             {
                 "notes": review_notes,
                 "changes": updates,
                 "next_step": "workflow_nodes",
                 "resume_stage_index": resume_stage_index,
+                "action": action,
             },
         )
         _queue_task(repo, task_id)
@@ -521,6 +532,88 @@ def _queue_task(repo: TaskRepository, task_id: str) -> dict | None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
     repo.add_event(task_id, "task_queued", "Task queued for worker processing.", {})
     return task
+
+
+def _workflow_stage_options(workflow_store: WorkflowStore, workflow_id: str | None) -> list[dict[str, object]]:
+    if not workflow_id:
+        return []
+    try:
+        workflow = workflow_store.get_workflow(str(workflow_id))
+    except WorkflowStoreError:
+        return []
+    if not workflow:
+        return []
+    options: list[dict[str, object]] = []
+    for index, stage in enumerate(workflow_store.build_stages(workflow)):
+        step_id = workflow.steps[index].id if index < len(workflow.steps) else stage.title
+        options.append(
+            {
+                "index": index,
+                "id": step_id,
+                "title": stage.title,
+            }
+        )
+    return options
+
+
+def _selected_resume_stage_index(
+    form: dict[str, str],
+    workflow_store: WorkflowStore,
+    task_id: str,
+    repo: TaskRepository,
+) -> int | None:
+    raw_value = _optional(form.get("resume_stage_index"))
+    if raw_value is None:
+        return None
+    try:
+        selected = int(raw_value)
+    except ValueError:
+        return None
+
+    task = repo.get_task(task_id)
+    workflow_id = str((task or {}).get("workflow_id") or "")
+    if not workflow_id:
+        return None
+    try:
+        workflow = workflow_store.get_workflow(workflow_id)
+    except WorkflowStoreError:
+        return None
+    if not workflow:
+        return None
+    stage_count = len(workflow_store.build_stages(workflow))
+    if selected < 0 or selected >= stage_count:
+        return None
+    return selected
+
+
+def _implementation_trigger_stage_index(
+    workflow_store: WorkflowStore,
+    task_id: str,
+    repo: TaskRepository,
+) -> int | None:
+    task = repo.get_task(task_id)
+    workflow_id = str((task or {}).get("workflow_id") or "")
+    if not workflow_id:
+        return None
+    try:
+        workflow = workflow_store.get_workflow(workflow_id)
+    except WorkflowStoreError:
+        return None
+    if not workflow:
+        return None
+    stages = workflow_store.build_stages(workflow)
+    for index, stage in enumerate(stages):
+        step_id = workflow.steps[index].id if index < len(workflow.steps) else ""
+        if step_id == "implementation-trigger-phase":
+            return index
+        for node in stage.nodes:
+            if node.id == "implementation-trigger" or node.role == "implementation_trigger":
+                return index
+    for index, stage in enumerate(stages):
+        step_id = workflow.steps[index].id if index < len(workflow.steps) else ""
+        if step_id == "implementation-phase":
+            return index
+    return None
 
 
 def _next_resume_stage_index(

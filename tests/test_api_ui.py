@@ -82,6 +82,54 @@ def test_root_shows_review_required_tasks(monkeypatch) -> None:
     assert "Review me" in response.text
 
 
+def test_root_shows_needs_input_tasks_before_review_queue(monkeypatch) -> None:
+    fake_client = FakeSupabaseClient(
+        {
+            "projects": [{"id": "firststart", "name": "First Start", "active": True}],
+            "tasks": [
+                {
+                    "id": "input-new",
+                    "title": "Second input",
+                    "status": "needs_input",
+                    "description": "Needs later clarification",
+                    "project_id": "firststart",
+                    "local_path": r"D:\Workbench\firststart",
+                    "updated_at": "2026-04-12T11:00:00+00:00",
+                },
+                {
+                    "id": "input-old",
+                    "title": "First input",
+                    "status": "needs_input",
+                    "description": "Needs first clarification",
+                    "project_id": "firststart",
+                    "local_path": r"D:\Workbench\firststart",
+                    "updated_at": "2026-04-12T10:00:00+00:00",
+                },
+                {
+                    "id": "review-1",
+                    "title": "Review me",
+                    "status": "review_required",
+                    "description": "Needs review",
+                    "updated_at": "2026-04-12T12:00:00+00:00",
+                },
+            ],
+        }
+    )
+    monkeypatch.setattr(main_module, "SupabaseRestClient", lambda _settings: fake_client)
+    client = TestClient(create_app())
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "Input required" in response.text
+    assert "First input" in response.text
+    assert "Second input" in response.text
+    assert "/tasks/input-old/review" in response.text
+    assert response.text.index("First input") < response.text.index("Second input")
+    assert response.text.index("Input required") < response.text.index("Review required")
+    assert 'window.location.reload()' in response.text
+
+
 def test_tasks_page_orders_most_recent_tasks_first(monkeypatch) -> None:
     fake_client = FakeSupabaseClient(
         {
@@ -207,6 +255,60 @@ def test_projects_delete_endpoint_removes_project(monkeypatch) -> None:
     assert response.status_code == 303
     assert response.headers["location"] == "/projects"
     assert fake_client.tables["projects"] == []
+
+
+def test_projects_delete_endpoint_removes_project_related_entries(monkeypatch) -> None:
+    fake_client = FakeSupabaseClient(
+        {
+            "projects": [
+                {
+                    "id": "example-1",
+                    "name": "Example 1",
+                    "description": "First project",
+                    "project_type": "python",
+                    "project_directory": r"D:\Workbench\firststart",
+                    "pycharm_mcp_enabled": True,
+                    "active": True,
+                }
+            ],
+            "tasks": [
+                {"id": "task-1", "project_id": "example-1", "title": "Task 1", "status": "done"},
+                {"id": "task-2", "project_id": "example-1", "title": "Task 2", "status": "queued"},
+                {"id": "task-other", "project_id": "example-2", "title": "Other Task", "status": "draft"},
+            ],
+            "task_events": [
+                {"id": "ev-1", "task_id": "task-1", "event_type": "note", "message": "A", "payload": {}},
+                {"id": "ev-2", "task_id": "task-2", "event_type": "note", "message": "B", "payload": {}},
+                {"id": "ev-other", "task_id": "task-other", "event_type": "note", "message": "C", "payload": {}},
+            ],
+            "artifacts": [
+                {"id": "ar-1", "task_id": "task-1", "artifact_type": "report", "path_or_storage_key": "a"},
+                {"id": "ar-2", "task_id": "task-2", "artifact_type": "report", "path_or_storage_key": "b"},
+                {"id": "ar-other", "task_id": "task-other", "artifact_type": "report", "path_or_storage_key": "c"},
+            ],
+            "project_specs": [
+                {"id": "spec-1", "project_id": "example-1", "spec_path": "borg-cube.md", "title": "Cube", "content": "# Cube"},
+                {"id": "spec-other", "project_id": "example-2", "spec_path": "borg-cube.md", "title": "Other", "content": "# Other"},
+            ],
+            "mcp_access_logs": [
+                {"id": "log-1", "project_id": "example-1", "tool_name": "project.search", "result_count": 1},
+                {"id": "log-other", "project_id": "example-2", "tool_name": "project.search", "result_count": 1},
+            ],
+        }
+    )
+    monkeypatch.setattr(main_module, "SupabaseRestClient", lambda _settings: fake_client)
+    client = TestClient(create_app())
+
+    response = client.post("/projects/example-1/delete", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/projects"
+    assert fake_client.tables["projects"] == []
+    assert [row["id"] for row in fake_client.tables["tasks"]] == ["task-other"]
+    assert [row["id"] for row in fake_client.tables["task_events"]] == ["ev-other"]
+    assert [row["id"] for row in fake_client.tables["artifacts"]] == ["ar-other"]
+    assert [row["id"] for row in fake_client.tables["project_specs"]] == ["spec-other"]
+    assert [row["id"] for row in fake_client.tables["mcp_access_logs"]] == ["log-other"]
 
 
 def test_orchestration_page_saves_agent_selection(tmp_path) -> None:
@@ -393,6 +495,7 @@ def test_workflows_page_renders_yaml_workflow() -> None:
     assert response.status_code == 200
     assert "Workflow collective" in response.text
     assert "Assimilation Demo" in response.text
+    assert "New Borg Cube Project" in response.text
     assert "Open detail" in response.text
     assert "Level 1" not in response.text
     assert "Borg Queen Architect" not in response.text
@@ -451,6 +554,16 @@ def test_workflows_api_returns_yaml_workflow() -> None:
     workflows = response.json()
     assert workflows[0]["id"] == "assimilation-demo"
     assert workflows[0]["entry_node"] == "queen-architect"
+    assert {workflow["id"] for workflow in workflows} >= {"assimilation-demo", "new_borg_cube_project"}
+    new_cube = next(workflow for workflow in workflows if workflow["id"] == "new_borg_cube_project")
+    assert [step["id"] for step in new_cube["steps"]] == [
+        "specification-phase",
+        "review-phase",
+        "disassembly-phase",
+        "task-storage-phase",
+        "implementation-trigger-phase",
+        "implementation-phase",
+    ]
 
 
 def test_workflow_settings_page_edits_yaml_file(tmp_path) -> None:
@@ -783,6 +896,52 @@ def test_task_review_confirm_resumes_next_unfinished_workflow_level(monkeypatch,
     assert fake_client.tables["tasks"][0]["status"] == "queued"
 
 
+def test_task_review_start_implementation_resumes_trigger_stage(monkeypatch, tmp_path) -> None:
+    workflows_root = tmp_path / "workflows"
+    workflows_root.mkdir()
+    (workflows_root / "demo.yaml").write_text(_implementation_trigger_workflow_yaml(), encoding="utf-8")
+    fake_client = FakeSupabaseClient(
+        {
+            "tasks": [{"id": "t1", "title": "Task", "status": "review_required", "workflow_id": "demo"}],
+            "task_events": [
+                {
+                    "id": "e1",
+                    "task_id": "t1",
+                    "event_type": "workflow_stage_completed",
+                    "message": "Workflow level 1 completed.",
+                    "payload": {"stage_index": 0, "next_stage_index": 1},
+                }
+            ],
+            "artifacts": [],
+            "projects": [],
+        }
+    )
+    settings = _test_settings(tmp_path, workflows_root=workflows_root)
+    monkeypatch.setattr(tasks_module, "SupabaseRestClient", lambda _settings: fake_client)
+    client = TestClient(create_app())
+    client.app.dependency_overrides[get_settings] = lambda: settings
+
+    page = client.get("/tasks/t1/review")
+    assert page.status_code == 200
+    assert "Start implementation" in page.text
+    assert "Trigger implementation task execution" in page.text
+
+    response = client.post(
+        "/tasks/t1/review",
+        data={"action": "start_implementation", "review_notes": "Start the implementation tasks."},
+        follow_redirects=False,
+    )
+
+    client.app.dependency_overrides.clear()
+    assert response.status_code == 303
+    resumed = [
+        event for event in fake_client.tables["task_events"] if event["event_type"] == "workflow_resumed"
+    ][0]
+    assert resumed["payload"]["resume_stage_index"] == 2
+    assert resumed["payload"]["action"] == "start_implementation"
+    assert fake_client.tables["tasks"][0]["status"] == "queued"
+
+
 def test_task_review_confirm_completes_when_no_workflow_levels_remain(monkeypatch, tmp_path) -> None:
     workflows_root = tmp_path / "workflows"
     workflows_root.mkdir()
@@ -1012,4 +1171,52 @@ steps:
     mode: sequential
     nodes:
       - verify
+"""
+
+
+def _implementation_trigger_workflow_yaml() -> str:
+    return """id: demo
+title: Demo
+description: Implementation trigger workflow.
+status: draft
+entry_node: intake
+nodes:
+  - id: intake
+    borg_name: Intake
+    agent: local-llm
+    tasks:
+      - id: intake-task
+        title: Intake
+        prompt: Intake.
+  - id: storage
+    borg_name: Task Storage
+    agent: borg-disassembler
+    tasks:
+      - id: store-tasks
+        title: Store tasks
+        prompt: Store tasks.
+  - id: trigger
+    borg_name: Implementation Trigger
+    role: implementation_trigger
+    agent: borg-disassembler
+    tasks:
+      - id: trigger-implementation
+        title: Trigger implementation
+        prompt: Queue stored implementation tasks.
+steps:
+  - id: intake
+    title: Intake
+    mode: sequential
+    nodes:
+      - intake
+  - id: task-storage-phase
+    title: Store generated implementation tasks
+    mode: sequential
+    nodes:
+      - storage
+  - id: implementation-trigger-phase
+    title: Trigger implementation task execution
+    mode: sequential
+    nodes:
+      - trigger
 """
