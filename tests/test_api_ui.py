@@ -793,6 +793,15 @@ def test_workflows_api_returns_yaml_workflow() -> None:
     assert workflows[0]["id"] == "borg-assimilation"
     assert workflows[0]["entry_node"] == "spec-assimilator"
     assert {workflow["id"] for workflow in workflows} >= {"borg-assimilation", "new_borg_cube_project"}
+    borg_assimilation = next(workflow for workflow in workflows if workflow["id"] == "borg-assimilation")
+    assert [step["id"] for step in borg_assimilation["steps"]] == [
+        "assimilation",
+        "spec-review",
+        "human-review",
+        "post-review-planning",
+        "synthesis",
+        "validation",
+    ]
     new_cube = next(workflow for workflow in workflows if workflow["id"] == "new_borg_cube_project")
     assert [step["id"] for step in new_cube["steps"]] == [
         "specification-phase",
@@ -1134,6 +1143,62 @@ def test_task_review_confirm_resumes_next_unfinished_workflow_level(monkeypatch,
     assert fake_client.tables["tasks"][0]["status"] == "queued"
 
 
+def test_task_review_confirm_advances_past_explicit_review_stage_and_recomputes_cube_plan(monkeypatch, tmp_path) -> None:
+    workflows_root = tmp_path / "workflows"
+    workflows_root.mkdir()
+    (workflows_root / "demo.yaml").write_text(_human_review_workflow_yaml(), encoding="utf-8")
+    fake_client = FakeSupabaseClient(
+        {
+            "tasks": [{"id": "t1", "title": "Task", "status": "review_required", "workflow_id": "demo"}],
+            "task_events": [
+                {
+                    "id": "e1",
+                    "task_id": "t1",
+                    "event_type": "workflow_stage_completed",
+                    "message": "Workflow level 2 completed.",
+                    "payload": {"stage_index": 1, "next_stage_index": 2},
+                },
+                {
+                    "id": "e2",
+                    "task_id": "t1",
+                    "event_type": "workflow_review_required",
+                    "message": "Workflow reached a human review checkpoint and paused before executing it.",
+                    "payload": {"review_stage_index": 2, "review_stage_id": "human-review", "next_stage_index": 3},
+                },
+            ],
+            "artifacts": [],
+            "projects": [],
+        }
+    )
+    settings = _test_settings(tmp_path, workflows_root=workflows_root)
+    monkeypatch.setattr(tasks_module, "SupabaseRestClient", lambda _settings: fake_client)
+    client = TestClient(create_app())
+    client.app.dependency_overrides[get_settings] = lambda: settings
+
+    response = client.post(
+        "/tasks/t1/review",
+        data={
+            "review_action": "confirm",
+            "review_notes": "For the stmcubemx area, generate a borg-cube.md that explicitly documents that no changes may be made in this module by AI, agents, or skills.",
+        },
+        follow_redirects=False,
+    )
+
+    client.app.dependency_overrides.clear()
+    assert response.status_code == 303
+    resumed = next(event for event in fake_client.tables["task_events"] if event["event_type"] == "workflow_resumed")
+    assert resumed["payload"]["review_stage_index"] == 2
+    assert resumed["payload"]["resume_stage_index"] == 3
+    confirmed = next(event for event in fake_client.tables["task_events"] if event["event_type"] == "human_review_confirmed")
+    assert confirmed["payload"]["review_stage_id"] == "human-review"
+    recomputed = next(event for event in fake_client.tables["task_events"] if event["event_type"] == "cube_plan_recomputed")
+    assert {
+        "name": "src/stm_cubemx/borg-cube.md",
+        "description": "Declares the module protected and not modifiable by AI, agents, or skills.",
+    } in recomputed["payload"]["cube_files"]
+    assert fake_client.tables["tasks"][0]["status"] == "queued"
+
+
 def test_task_review_start_implementation_resumes_trigger_stage(monkeypatch, tmp_path) -> None:
     workflows_root = tmp_path / "workflows"
     workflows_root.mkdir()
@@ -1457,4 +1522,64 @@ steps:
     mode: sequential
     nodes:
       - trigger
+"""
+
+
+def _human_review_workflow_yaml() -> str:
+    return """id: demo
+title: Demo
+description: Explicit human review workflow.
+status: draft
+entry_node: intake
+nodes:
+  - id: intake
+    borg_name: Intake
+    agent: local-llm
+    tasks:
+      - id: intake-task
+        title: Intake
+        prompt: Intake.
+  - id: review-bot
+    borg_name: Review Bot
+    agent: local-llm
+    tasks:
+      - id: review-task
+        title: Review
+        prompt: Review.
+  - id: human-review-node
+    borg_name: Human Review
+    role: reviewer
+    agent: local-llm
+    tasks:
+      - id: human-review-task
+        title: Human Review Handoff
+        prompt: Human review.
+  - id: synthesis-node
+    borg_name: Synthesis
+    agent: local-llm
+    tasks:
+      - id: synthesis-task
+        title: Synthesis
+        prompt: Synthesis.
+steps:
+  - id: intake
+    title: Intake
+    mode: sequential
+    nodes:
+      - intake
+  - id: automated-review
+    title: Automated Review
+    mode: sequential
+    nodes:
+      - review-bot
+  - id: human-review
+    title: Human Review
+    mode: sequential
+    nodes:
+      - human-review-node
+  - id: synthesis
+    title: Synthesis
+    mode: sequential
+    nodes:
+      - synthesis-node
 """

@@ -87,6 +87,10 @@ class AgentWorker:
         try:
             initial_events = self.task_repository.list_events(task_id)
             resume_context = self._latest_workflow_resume(initial_events)
+            if resume_context:
+                print(f"[WORKER] picked up post-review continuation for task {task_id}")
+            else:
+                print(f"[WORKER] picked up task {task_id}")
             self.task_repository.update_status(task_id, "running")
             self.task_repository.add_event(
                 task_id,
@@ -113,6 +117,7 @@ class AgentWorker:
                     return sparse_project
             if resume_context:
                 review_context = self._latest_review_context(initial_events)
+                print(f"[WORKFLOW] Continuing after review with input: {review_context.get('notes') if review_context else 'None'}")
                 self.task_repository.add_event(
                     task_id,
                     "workflow_resume_detected",
@@ -137,6 +142,12 @@ class AgentWorker:
                 )
             else:
                 llm_plan = self._run_local_llm_processing(task)
+            workflow_result: dict[str, Any] = {
+                "paused_for_review": False,
+                "completed_all_stages": False,
+                "uses_explicit_review": False,
+                "executed_stage_count": 0,
+            }
             if task.get("workflow_id"):
                 self.task_repository.add_event(
                     task_id,
@@ -144,12 +155,37 @@ class AgentWorker:
                     "Worker started the selected workflow after local LLM processing.",
                     {"workflow_id": task.get("workflow_id"), "agent_name": agent_name, "llm_plan": llm_plan},
                 )
-                self._run_workflow(
+                workflow_result = self._run_workflow(
                     task,
                     agent_name,
                     llm_plan,
                     stage_index=resume_context.get("resume_stage_index", 0) if resume_context else 0,
                 )
+            if resume_context:
+                resumed_stage_index = resume_context.get("resume_stage_index", 0)
+                self.task_repository.add_event(
+                    task_id,
+                    "post_review_stage_execution",
+                    "Worker evaluated post-review workflow execution.",
+                    {
+                        "resume_stage_index": resumed_stage_index,
+                        "executed_stage_count": workflow_result.get("executed_stage_count", 0),
+                        "completed_all_stages": workflow_result.get("completed_all_stages", False),
+                    },
+                )
+                if int(workflow_result.get("executed_stage_count", 0)) <= 0:
+                    message = "Premature completion blocked: no post-review execution ran after review."
+                    self.task_repository.add_event(
+                        task_id,
+                        "workflow_premature_completion_blocked",
+                        message,
+                        {
+                            "resume_stage_index": resumed_stage_index,
+                            "workflow_id": task.get("workflow_id"),
+                        },
+                    )
+                    self.task_repository.update_status(task_id, "failed")
+                    raise RuntimeError(message)
             self.task_repository.add_event(
                 task_id,
                 "project_lookup_started",
@@ -210,6 +246,26 @@ class AgentWorker:
                     "pycharm_mcp_enabled": bool(task.get("pycharm_mcp_enabled")),
                 },
             )
+            if workflow_result.get("paused_for_review"):
+                self.task_repository.add_event(
+                    task_id,
+                    "review_required",
+                    "Worker paused at an explicit human review checkpoint.",
+                    {
+                        "artifact_id": artifact["id"],
+                        "review_stage_index": workflow_result.get("review_stage_index"),
+                        "review_stage_id": workflow_result.get("review_stage_id"),
+                        "next_stage_index": workflow_result.get("next_stage_index"),
+                    },
+                )
+                self.task_repository.update_status(task_id, "review_required")
+                return {"task_id": task_id, "status": "review_required", "result_count": result_count}
+
+            if workflow_result.get("uses_explicit_review") and workflow_result.get("completed_all_stages"):
+                print("[WORKFLOW] marking task as done")
+                self.task_repository.update_status(task_id, "done")
+                return {"task_id": task_id, "status": "done", "result_count": result_count}
+
             self.task_repository.add_event(
                 task_id,
                 "review_required",
@@ -363,6 +419,7 @@ class AgentWorker:
 
         client = self.local_llm_client or LocalLlmClient(orchestration.local_model)
         prompt = self._llm_review_resume_prompt(task, review_context, stage_index)
+        print(f"[LLM] executing continuation with review input for task {task_id}")
         self.task_repository.add_event(
             task_id,
             "llm_request",
@@ -1339,7 +1396,7 @@ class AgentWorker:
                 continue
             if event_type == "review_noted" and payload.get("notes"):
                 latest["notes"] = str(payload.get("notes") or "")
-            elif event_type == "review_confirmed" and payload.get("notes"):
+            elif event_type in ("review_confirmed", "human_review_confirmed") and payload.get("notes"):
                 latest["notes"] = str(payload.get("notes") or latest.get("notes") or "")
             elif event_type == "llm_processing_completed":
                 if payload.get("summary"):
@@ -1354,10 +1411,10 @@ class AgentWorker:
         default_agent_name: str,
         llm_plan: dict[str, Any],
         stage_index: int = 0,
-    ) -> None:
+    ) -> dict[str, Any]:
         workflow_id = task.get("workflow_id")
         if not workflow_id:
-            return
+            return {"paused_for_review": False, "completed_all_stages": False, "uses_explicit_review": False, "executed_stage_count": 0}
 
         try:
             workflow = self.workflow_store.get_workflow(str(workflow_id))
@@ -1368,7 +1425,7 @@ class AgentWorker:
                 "Selected workflow could not be loaded.",
                 {"workflow_id": workflow_id, "error": str(exc)},
             )
-            return
+            return {"paused_for_review": False, "completed_all_stages": False, "uses_explicit_review": False, "executed_stage_count": 0}
         if not workflow:
             self.task_repository.add_event(
                 task["id"],
@@ -1376,24 +1433,83 @@ class AgentWorker:
                 "Selected workflow was not found.",
                 {"workflow_id": workflow_id},
             )
-            return
+            return {"paused_for_review": False, "completed_all_stages": False, "uses_explicit_review": False, "executed_stage_count": 0}
 
         stages = self.workflow_store.build_stages(workflow)
         if not stages:
-            return
+            return {"paused_for_review": False, "completed_all_stages": False, "uses_explicit_review": False, "executed_stage_count": 0}
 
         bounded_stage_index = min(max(stage_index, 0), len(stages) - 1)
-        stage = stages[bounded_stage_index]
-        stage_id = workflow.steps[bounded_stage_index].id if bounded_stage_index < len(workflow.steps) else stage.title
+        uses_explicit_review = self._workflow_uses_explicit_review_stages(workflow, stages)
+        current_stage_index = bounded_stage_index
+        executed_stage_count = 0
+        while current_stage_index < len(stages):
+            stage = stages[current_stage_index]
+            stage_id = workflow.steps[current_stage_index].id if current_stage_index < len(workflow.steps) else stage.title
+            if uses_explicit_review and self._stage_requires_human_review(workflow, current_stage_index, stage):
+                next_stage_index = current_stage_index + 1 if current_stage_index + 1 < len(stages) else None
+                self.task_repository.add_event(
+                    task["id"],
+                    "workflow_review_required",
+                    "Workflow reached a human review checkpoint and paused before executing it.",
+                    {
+                        "workflow_id": workflow.id,
+                        "review_stage_id": stage_id,
+                        "review_stage_index": current_stage_index,
+                        "review_stage_title": stage.title,
+                        "next_stage_index": next_stage_index,
+                    },
+                )
+                return {
+                    "paused_for_review": True,
+                    "completed_all_stages": False,
+                    "uses_explicit_review": True,
+                    "executed_stage_count": executed_stage_count,
+                    "review_stage_index": current_stage_index,
+                    "review_stage_id": stage_id,
+                    "next_stage_index": next_stage_index,
+                }
+
+            if bounded_stage_index > 0:
+                print(f"[WORKFLOW] advancing to post-review stage: {stage.title}")
+                print("[WORKER] executing post-review stage")
+                if "plan" in stage.title.lower():
+                    print("[PLANNER] recomputed cube plan")
+                if "synthesis" in stage.title.lower():
+                    print("[SYNTHESIS] generating cube files")
+            self._run_workflow_stage(task, workflow, default_agent_name, llm_plan, current_stage_index, stage)
+            executed_stage_count += 1
+            current_stage_index += 1
+            if not uses_explicit_review:
+                break
+
+        return {
+            "paused_for_review": False,
+            "completed_all_stages": current_stage_index >= len(stages),
+            "uses_explicit_review": uses_explicit_review,
+            "executed_stage_count": executed_stage_count,
+            "next_stage_index": current_stage_index if current_stage_index < len(stages) else None,
+        }
+
+    def _run_workflow_stage(
+        self,
+        task: dict[str, Any],
+        workflow: WorkflowDefinition,
+        default_agent_name: str,
+        llm_plan: dict[str, Any],
+        stage_index: int,
+        stage: Any,
+    ) -> None:
+        stage_id = workflow.steps[stage_index].id if stage_index < len(workflow.steps) else stage.title
         nodes = self._ordered_stage_nodes(workflow, stage.nodes, llm_plan.get("first_node_id"))
         self.task_repository.add_event(
             task["id"],
             "workflow_stage_started",
-            f"Workflow level {bounded_stage_index + 1} started: {stage.title}.",
+            f"Workflow level {stage_index + 1} started: {stage.title}.",
             {
                 "workflow_id": workflow.id,
                 "stage_id": stage_id,
-                "stage_index": bounded_stage_index,
+                "stage_index": stage_index,
                 "stage_title": stage.title,
                 "stage_mode": stage.mode,
             },
@@ -1408,7 +1524,7 @@ class AgentWorker:
                     "node_id": nodes[0].id,
                     "llm_plan": llm_plan,
                     "stage_id": stage_id,
-                    "stage_index": bounded_stage_index,
+                    "stage_index": stage_index,
                 },
             )
 
@@ -1426,7 +1542,7 @@ class AgentWorker:
                     "agent_name": agent_name,
                     "sequence": index,
                     "stage_id": stage_id,
-                    "stage_index": bounded_stage_index,
+                    "stage_index": stage_index,
                 },
             )
             self.task_repository.add_event(
@@ -1439,7 +1555,7 @@ class AgentWorker:
                     "agent_name": agent_name,
                     "skills": selected_skills,
                     "stage_id": stage_id,
-                    "stage_index": bounded_stage_index,
+                    "stage_index": stage_index,
                 },
             )
             command_results.extend(
@@ -1447,7 +1563,7 @@ class AgentWorker:
                     parent_task=task,
                     workflow=workflow,
                     stage_id=stage_id,
-                    stage_index=bounded_stage_index,
+                    stage_index=stage_index,
                     node=node,
                 )
             )
@@ -1457,22 +1573,35 @@ class AgentWorker:
                 task,
                 workflow_id=workflow.id,
                 stage_id=stage_id,
-                stage_index=bounded_stage_index,
+                stage_index=stage_index,
             )
         self.task_repository.add_event(
             task["id"],
             "workflow_stage_completed",
-            f"Workflow level {bounded_stage_index + 1} completed: {stage.title}.",
+            f"Workflow level {stage_index + 1} completed: {stage.title}.",
             {
                 "workflow_id": workflow.id,
                 "stage_id": stage_id,
-                "stage_index": bounded_stage_index,
+                "stage_index": stage_index,
                 "stage_title": stage.title,
-                "next_stage_index": bounded_stage_index + 1 if bounded_stage_index + 1 < len(stages) else None,
+                "next_stage_index": stage_index + 1 if stage_index + 1 < len(self.workflow_store.build_stages(workflow)) else None,
                 "triggered_implementation_task_ids": [queued.get("id") for queued in triggered_tasks],
                 "command_results": command_results,
             },
         )
+
+    def _workflow_uses_explicit_review_stages(self, workflow: WorkflowDefinition, stages: list[Any]) -> bool:
+        return any(self._stage_requires_human_review(workflow, index, stage) for index, stage in enumerate(stages))
+
+    def _stage_requires_human_review(self, workflow: WorkflowDefinition, stage_index: int, stage: Any) -> bool:
+        stage_id = workflow.steps[stage_index].id if stage_index < len(workflow.steps) else stage.title
+        candidates = [stage_id, stage.title]
+        for node in stage.nodes:
+            candidates.extend([node.id, node.borg_name, node.role])
+            for workflow_task in node.tasks:
+                candidates.extend([workflow_task.id, workflow_task.title, workflow_task.prompt])
+        normalized = " ".join(str(candidate or "").lower() for candidate in candidates)
+        return "human-review" in normalized or "human review" in normalized
 
     def _run_node_command_gates(
         self,
@@ -1767,7 +1896,7 @@ class AgentWorker:
             payload = event.get("payload") or {}
             if not isinstance(payload, dict):
                 payload = {}
-            if event_type == "workflow_resumed":
+            if event_type in ("workflow_resumed", "human_review_confirmed"):
                 raw_index = payload.get("resume_stage_index", 1)
                 try:
                     resume_stage_index = int(raw_index)

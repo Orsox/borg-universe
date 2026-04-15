@@ -12,7 +12,12 @@ nodes:
       - id: project-scan
         title: Scan project and materialize borg-cube specs
         prompt: >-
-          Scan the existing target project and identify the maintained modules that are actually used by the codebase, configuration, or entry points. Create or update a root borg-cube.md plus one module borg-cube.md for every used module boundary. Set materialize_borg_cube_files to true so the specifications are written into the target project. The root borg-cube.md must use the canonical sections and, inside "Submodules / Internal Structure", list each module spec path with a short responsibility statement, the dependency or consumer relationship, and clear guidance for agents about when to open that module spec. Never modify source code, tests, dependency manifests, build files, generated assets, or runtime configuration. Only describe the project through borg-cube.md files, and mark all weak evidence as assumptions.
+          Goal: Generate missing borg-cube files for the project
+          Scope: Analyze repository and derive required cube structure
+          Constraints:
+          - Do not modify source code or configuration
+          - Mark all weak evidence as assumptions
+          - Set materialize_borg_cube_files to true
         status: draft
   - id: requirement-node
     borg_name: Requirement Node
@@ -22,7 +27,12 @@ nodes:
       - id: spec-review
         title: Review assimilated borg-cube specs
         prompt: >-
-          Review the generated project and module borg_cube_specs for structural quality, evidence fidelity, terminology consistency, and agent usability. Ensure the root borg-cube.md references all generated module specs with safe relative paths and actionable one-line guidance, and ensure no implementation or code-change instructions leaked into the documentation. Return corrected borg_cube_specs whenever fixes are required. Do not create implementation_tasks and do not request code changes.
+          Goal: Review generated borg_cube_specs for structural quality
+          Scope: Project and module specifications
+          Constraints:
+          - Ensure root borg-cube.md references all module specs correctly
+          - No implementation leakage allowed
+          - Return corrected borg_cube_specs if fixes are required
         status: draft
   - id: human-review-node
     borg_name: Human Review Phase
@@ -32,11 +42,28 @@ nodes:
       - id: human-review-handoff
         title: Compact User Review & Validation
         prompt: >-
-          Produce a Compact Review Output for the assimilated project specifications.
-          Highlight critical points, assumptions, and clear decision points.
-          Include a clear, minimal preview of the required Cube files (cube-*.json, cube-*.md).
-          Provide the === HUMAN REVIEW INPUT === block and WAIT for feedback.
-          After receiving feedback, perform Adaptive Agent & Skill Adjustment.
+          Goal: Produce Compact Review Output for user validation
+          Scope: Reviewed specifications and Cube file preview
+          Constraints:
+          - Max 3 bullets for Summary
+          - MANDATORY Cube Files Preview
+          - Single Review Decision field (Label: Review Decision (Required))
+          - Perform Adaptive Agent & Skill Adjustment after feedback
+        status: draft
+  - id: post-review-planner
+    borg_name: Post-Review Planning Update
+    role: planner
+    agent: borg-requirement-node
+    tasks:
+      - id: update-plan-after-review
+        title: Merge human review and update synthesis plan
+        prompt: >-
+          Goal: Merge authoritative human review into the execution plan
+          Scope: borg_cube_specs, protected modules, and required cube files
+          Constraints:
+          - Treat human review as authoritative
+          - Recompute required borg-cube.md outputs before synthesis
+          - Ensure requested protected-module specs are included in the plan
         status: draft
   - id: cube-file-synthesizer
     borg_name: Cube File Synthesis Phase
@@ -46,9 +73,27 @@ nodes:
       - id: generate-cube-files
         title: Synthesize Cube-Borg and Cube-MD files
         prompt: >-
-          Generate all required Cube files (cube-*.json and cube-*.md) based on the reviewed specifications and user feedback.
-          Ensure consistent naming, machine-readable JSON structure, and human-readable Markdown context.
-          Output a short summary mapping each file back to the requirements and user decisions.
+          Goal: Synthesize required Cube files (cube-*.json and cube-*.md)
+          Scope: All identified agents, skills, and project structure
+          Constraints:
+          - Follow human review preview exactly
+          - Machine-readable JSON, human-readable MD
+          - Respect protected folders (e.g. /src/stm_cubemx/)
+        status: draft
+  - id: validation-node
+    borg_name: Validation and Finalization Phase
+    role: validator
+    agent: borg-cube-testing-node
+    tasks:
+      - id: validate-generated-cube-files
+        title: Validate synthesized cube outputs
+        prompt: >-
+          Goal: Validate post-review cube outputs before completion
+          Scope: recomputed cube plan and synthesized cube files
+          Constraints:
+          - Confirm every required file from post-review planning is represented
+          - Fail if requested protected-module specs are missing
+          - Produce a compact validation summary for finalization
         status: draft
 steps:
   - id: assimilation
@@ -71,8 +116,18 @@ steps:
     mode: sequential
     nodes:
       - human-review-node
+  - id: post-review-planning
+    title: Post-Review Planning Update
+    mode: sequential
+    nodes:
+      - post-review-planner
   - id: synthesis
     title: Cube File Synthesis
     mode: sequential
     nodes:
       - cube-file-synthesizer
+  - id: validation
+    title: Validation and Finalization
+    mode: sequential
+    nodes:
+      - validation-node

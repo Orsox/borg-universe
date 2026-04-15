@@ -1287,6 +1287,199 @@ steps:
     assert completed_event["payload"]["resume_stage_index"] == 1
 
 
+def test_worker_pauses_only_at_explicit_human_review_and_finishes_post_review_continuation(tmp_path: Path) -> None:
+    workflows_root = tmp_path / "workflows"
+    workflows_root.mkdir()
+    (workflows_root / "demo.yaml").write_text(
+        """id: demo
+title: Demo
+description: Explicit human review workflow.
+status: draft
+entry_node: intake
+nodes:
+  - id: intake
+    borg_name: Intake Agent
+    agent: local-llm
+    tasks:
+      - id: normalize
+        title: Normalize request
+        prompt: Normalize the task.
+  - id: auto-review
+    borg_name: Auto Review Agent
+    agent: local-llm
+    tasks:
+      - id: review-task
+        title: Review spec
+        prompt: Review the spec.
+  - id: human-review-node
+    borg_name: Human Review
+    role: reviewer
+    agent: local-llm
+    tasks:
+      - id: human-review-task
+        title: Human review handoff
+        prompt: Human review.
+  - id: synthesis-node
+    borg_name: Synthesis Agent
+    agent: local-llm
+    tasks:
+      - id: synthesize
+        title: Synthesize cube files
+        prompt: Synthesize the cube files.
+steps:
+  - id: intake
+    title: Intake
+    mode: sequential
+    nodes:
+      - intake
+  - id: automated-review
+    title: Automated Review
+    mode: sequential
+    nodes:
+      - auto-review
+  - id: human-review
+    title: Human Review
+    mode: sequential
+    nodes:
+      - human-review-node
+  - id: synthesis
+    title: Synthesis
+    mode: sequential
+    nodes:
+      - synthesis-node
+""",
+        encoding="utf-8",
+    )
+    settings = _settings(tmp_path, workflows_root)
+    client = FakeSupabaseClient(
+        {
+            "tasks": [{"id": "t1", "title": "Task 1", "status": "queued", "workflow_id": "demo", "assigned_agent": "local-llm"}],
+            "task_events": [],
+            "artifacts": [],
+        }
+    )
+    worker = AgentWorker(
+        task_repository=TaskRepository(client),  # type: ignore[arg-type]
+        artifact_repository=ArtifactRepository(client),  # type: ignore[arg-type]
+        settings=settings,
+        local_llm_client=FakeLocalLlmClient(),
+    )
+
+    worker.process_next_batch()
+
+    assert client.tables["tasks"][0]["status"] == "review_required"
+    review_required_event = next(event for event in client.tables["task_events"] if event["event_type"] == "workflow_review_required")
+    assert review_required_event["payload"]["review_stage_index"] == 2
+    assert review_required_event["payload"]["next_stage_index"] == 3
+    stage_starts = [event["payload"]["stage_index"] for event in client.tables["task_events"] if event["event_type"] == "workflow_stage_started"]
+    assert stage_starts == [0, 1]
+
+    client.tables["tasks"][0]["status"] = "queued"
+    client.tables["task_events"].append(
+        {
+            "id": "review-1",
+            "task_id": "t1",
+            "event_type": "human_review_confirmed",
+            "message": "Human review was confirmed and committed.",
+            "payload": {"review_stage_index": 2, "review_stage_id": "human-review", "resume_stage_index": 3, "notes": "Proceed with synthesis."},
+        }
+    )
+    client.tables["task_events"].append(
+        {
+            "id": "review-2",
+            "task_id": "t1",
+            "event_type": "workflow_resumed",
+            "message": "Review completed; the selected workflow stage is queued.",
+            "payload": {"review_stage_index": 2, "review_stage_id": "human-review", "resume_stage_index": 3},
+        }
+    )
+
+    worker.process_next_batch()
+
+    assert client.tables["tasks"][0]["status"] == "done"
+    all_stage_starts = [event["payload"]["stage_index"] for event in client.tables["task_events"] if event["event_type"] == "workflow_stage_started"]
+    assert all_stage_starts == [0, 1, 3]
+    assert not any(
+        event["event_type"] == "workflow_review_required" and event["payload"].get("review_stage_index") == 3
+        for event in client.tables["task_events"]
+    )
+
+
+def test_worker_blocks_premature_done_when_review_resume_has_no_post_review_stage(tmp_path: Path) -> None:
+    workflows_root = tmp_path / "workflows"
+    workflows_root.mkdir()
+    (workflows_root / "demo.yaml").write_text(
+        """id: demo
+title: Demo
+description: Invalid explicit review workflow.
+status: draft
+entry_node: intake
+nodes:
+  - id: intake
+    borg_name: Intake Agent
+    agent: local-llm
+    tasks:
+      - id: normalize
+        title: Normalize request
+        prompt: Normalize the task.
+  - id: human-review-node
+    borg_name: Human Review
+    role: reviewer
+    agent: local-llm
+    tasks:
+      - id: human-review-task
+        title: Human review handoff
+        prompt: Human review.
+steps:
+  - id: intake
+    title: Intake
+    mode: sequential
+    nodes:
+      - intake
+  - id: human-review
+    title: Human Review
+    mode: sequential
+    nodes:
+      - human-review-node
+""",
+        encoding="utf-8",
+    )
+    settings = _settings(tmp_path, workflows_root)
+    client = FakeSupabaseClient(
+        {
+            "tasks": [{"id": "t1", "title": "Task 1", "status": "queued", "workflow_id": "demo", "assigned_agent": "local-llm"}],
+            "task_events": [
+                {
+                    "id": "review-1",
+                    "task_id": "t1",
+                    "event_type": "human_review_confirmed",
+                    "message": "Human review was confirmed and committed.",
+                    "payload": {"review_stage_index": 1, "review_stage_id": "human-review", "resume_stage_index": 2, "notes": "Continue."},
+                },
+                {
+                    "id": "review-2",
+                    "task_id": "t1",
+                    "event_type": "workflow_resumed",
+                    "message": "Review completed; the selected workflow stage is queued.",
+                    "payload": {"review_stage_index": 1, "review_stage_id": "human-review", "resume_stage_index": 2},
+                },
+            ],
+            "artifacts": [],
+        }
+    )
+    worker = AgentWorker(
+        task_repository=TaskRepository(client),  # type: ignore[arg-type]
+        artifact_repository=ArtifactRepository(client),  # type: ignore[arg-type]
+        settings=settings,
+        local_llm_client=FakeLocalLlmClient(),
+    )
+
+    worker.process_next_batch()
+
+    assert client.tables["tasks"][0]["status"] == "failed"
+    assert any(event["event_type"] == "workflow_premature_completion_blocked" for event in client.tables["task_events"])
+
+
 def test_worker_executes_deterministic_python_command_gate(tmp_path: Path) -> None:
     workflows_root = tmp_path / "workflows"
     workflows_root.mkdir()
