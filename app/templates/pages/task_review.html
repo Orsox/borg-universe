@@ -3,7 +3,7 @@
 {% block title %}Review {{ task.title }} - Borg Universe{% endblock %}
 {% block eyebrow %}Review{% endblock %}
 {% block heading %}{{ task.title }}{% endblock %}
-{% block summary %}{{ "Provide the missing human input, then continue the workflow." if task.status == "needs_input" else "Review, modify, or confirm the task so the workflow chain can continue." }}{% endblock %}
+{% block summary %}Review, modify, or confirm the task so the workflow chain can continue.{% endblock %}
 {% block page_actions %}
 <a class="button secondary" href="/tasks/{{ task.id }}">Back to task</a>
 {% endblock %}
@@ -17,29 +17,6 @@
         <span class="badge {{ task.status|badge_class }}">{{ task.status }}</span>
       </div>
       <div class="panel-body">
-        {% if needs_input_guidance %}
-        <div class="callout warning">
-          <strong>{{ needs_input_guidance.title }}</strong>
-          <p>{{ needs_input_guidance.summary }}</p>
-          <ol>
-            {% for step in needs_input_guidance.steps %}
-            <li>{{ step }}</li>
-            {% endfor %}
-          </ol>
-        </div>
-        {% endif %}
-        {% if actionable_context %}
-        <div class="callout">
-          <strong>Current worker context</strong>
-          <p class="muted">{{ actionable_context.created_at }} · {{ actionable_context.event_type }}</p>
-          <textarea readonly rows="4">{{ actionable_context.message }}</textarea>
-          {% if actionable_context.details %}
-          <label>Details
-            <textarea readonly rows="8">{{ actionable_context.details }}</textarea>
-          </label>
-          {% endif %}
-        </div>
-        {% endif %}
         <div class="callout">
           <strong>LLM summary for review</strong>
           {% if llm_review %}

@@ -21,24 +21,6 @@
 
 <section class="section panel">
   <div class="panel-header">
-    <h2>New workflow request</h2>
-  </div>
-  <div class="panel-body">
-    <form method="post" action="/workflows/new">
-      <div class="form-grid">
-        <label class="full">Describe your workflow
-          <textarea name="description" rows="4" placeholder="E.g. Create a workflow for automated firmware testing on STM32..." required></textarea>
-        </label>
-      </div>
-      <div class="actions">
-        <button type="submit">Initialize harness</button>
-      </div>
-    </form>
-  </div>
-</section>
-
-<section class="section panel">
-  <div class="panel-header">
     <h2>Workflow list</h2>
     <span class="badge done">{{ workflow_count }}</span>
   </div>

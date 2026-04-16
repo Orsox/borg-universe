@@ -26,7 +26,7 @@ def badge_class(value: Any) -> str:
         return "queued"
     if normalized in {"review_required", "needs_input", "failed", "false"}:
         return "review_required"
-    if normalized in {"defined", "done", "enabled", "true", "success"}:
+    if normalized in {"done", "enabled", "true", "success"}:
         return "done"
     if normalized in {"disabled", "cancelled"}:
         return "disabled"

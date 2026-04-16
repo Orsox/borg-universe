@@ -3,13 +3,10 @@ from __future__ import annotations
 from typing import Annotated
 from urllib.parse import parse_qs, quote
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from app.core.config import Settings, get_settings
-from app.db.repositories import TaskRepository
-from app.db.supabase_client import SupabaseRestClient
-from app.models.tasks import TaskCreate
 from app.services.workflow_store import WorkflowStore, WorkflowStoreError
 from app.ui import templates
 
@@ -18,10 +15,6 @@ router = APIRouter()
 
 def get_workflow_store(settings: Annotated[Settings, Depends(get_settings)]) -> WorkflowStore:
     return WorkflowStore(settings.workflows_root)
-
-
-def get_task_repository(settings: Annotated[Settings, Depends(get_settings)]) -> TaskRepository:
-    return TaskRepository(SupabaseRestClient(settings))
 
 
 def _workflow_progress(store: WorkflowStore, workflows: list) -> dict[str, dict[str, int | None]]:
@@ -87,42 +80,6 @@ async def workflows_dashboard(
             "empty_message": "Place YAML files in BORG/workflows to make workflow summaries visible.",
         },
     )
-
-
-@router.post("/workflows/new")
-async def create_workflow_task(
-    request: Request,
-    background_tasks: BackgroundTasks,
-    repo: Annotated[TaskRepository, Depends(get_task_repository)],
-    settings: Annotated[Settings, Depends(get_settings)],
-) -> RedirectResponse:
-    form = await _read_urlencoded_form(request)
-    description = form.get("description", "").strip()
-    if not description:
-        raise HTTPException(status_code=400, detail="Description is required")
-
-    task = TaskCreate(
-        title=f"New Workflow: {description[:50]}...",
-        description=description,
-        workflow_id="new_workflow_harness",
-        assigned_agent="local-llm",
-        assigned_skill="new_workflow_harness",
-    )
-    
-    created = repo.create_task(task)
-    repo.update_status(created["id"], "queued")
-    repo.add_event(
-        created["id"],
-        "task_queued",
-        "New Workflow Harness task initialized from UI.",
-        {"description": description}
-    )
-    
-    # Start task processing in background
-    from app.main import _start_task_processing
-    background_tasks.add_task(_start_task_processing, settings, created["id"])
-    
-    return RedirectResponse(f"/tasks/{created['id']}", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.get("/workflows/settings", response_class=HTMLResponse)

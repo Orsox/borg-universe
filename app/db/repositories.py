@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from app.db.supabase_client import SupabaseRestClient
-from app.db.supabase_client import SupabaseRestError
 from app.models.borg import BorgSkill, BorgUnit
 from app.models.knowledge import CodeExampleCreate, KnowledgeEntryCreate, RuleCreate
 from app.models.projects import ProjectCreate
@@ -112,7 +110,7 @@ class TaskRepository:
             query={
                 "select": "*",
                 "status": f"eq.{status}",
-                "order": "sequence_index.asc,created_at.asc",
+                "order": "created_at.asc",
                 "limit": str(limit),
             },
         )
@@ -159,42 +157,20 @@ class TaskRepository:
 
     def create_task(self, task: TaskCreate, initial_status: TaskStatus = "queued") -> dict[str, Any]:
         body = task.model_dump(exclude_none=True)
-        if not body.get("workspace_metadata"):
-            body.pop("workspace_metadata", None)
         body["status"] = initial_status
-        try:
-            row = self.client.request(
-                "POST",
-                "tasks",
-                query={"select": "*"},
-                body=body,
-                prefer="return=representation",
-            )[0]
-        except SupabaseRestError as exc:
-            if "workspace_metadata" not in str(exc):
-                raise
-            fallback_body = dict(body)
-            fallback_body.pop("workspace_metadata", None)
-            row = self.client.request(
-                "POST",
-                "tasks",
-                query={"select": "*"},
-                body=fallback_body,
-                prefer="return=representation",
-            )[0]
-        try:
-            self.add_event(
-                row["id"],
-                "task_created",
-                "Task created.",
-                {"status": row["status"], "workspace_metadata": row.get("workspace_metadata") or {}},
-            )
-        except Exception as exc:
-            logging.getLogger("borg_universe").warning(
-                "Task %s was created, but the task_created event could not be stored: %s",
-                row.get("id"),
-                exc,
-            )
+        row = self.client.request(
+            "POST",
+            "tasks",
+            query={"select": "*"},
+            body=body,
+            prefer="return=representation",
+        )[0]
+        self.add_event(
+            row["id"],
+            "task_created",
+            "Task created.",
+            {"status": row["status"]},
+        )
         return row
 
     def update_status(self, task_id: str, status: TaskStatus) -> dict[str, Any] | None:
@@ -389,45 +365,6 @@ class BorgRegistryRepository:
             prefer="return=representation",
         )
         return rows[0] if rows else None
-
-
-class ProjectRegistryBindingRepository:
-    def __init__(self, client: SupabaseRestClient) -> None:
-        self.client = client
-        self.table = "project_registry_bindings"
-
-    def list_for_project(self, project_id: str) -> list[dict[str, Any]]:
-        return self.client.request(
-            "GET",
-            self.table,
-            query={"select": "*", "project_id": f"eq.{project_id}"},
-        )
-
-    def bind_units(self, project_id: str, units: list[dict[str, str]]) -> list[dict[str, Any]]:
-        if not units:
-            return []
-
-        body = [
-            {"project_id": project_id, "unit_name": u["name"], "unit_type": u["type"]}
-            for u in units
-        ]
-
-        return self.client.request(
-            "POST",
-            self.table,
-            query={"select": "*", "on_conflict": "project_id,unit_name,unit_type"},
-            body=body,
-            prefer="resolution=merge-duplicates,return=representation",
-        )
-
-    def unbind_all(self, project_id: str) -> bool:
-        self.client.request(
-            "DELETE",
-            self.table,
-            query={"project_id": f"eq.{project_id}"},
-            prefer="return=minimal",
-        )
-        return True
 
 
 class McpAuditRepository:

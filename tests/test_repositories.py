@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from app.db.repositories import ContentRepository, McpAuditRepository, ProjectRepository, TaskRepository
-from app.db.supabase_client import SupabaseRestError
 from app.models.knowledge import KnowledgeEntryCreate
 from app.models.tasks import TaskCreate
 from tests.fakes import FakeSupabaseClient
@@ -11,67 +10,10 @@ def test_task_repository_creates_task_and_event() -> None:
     client = FakeSupabaseClient({"tasks": [], "task_events": []})
     repo = TaskRepository(client)  # type: ignore[arg-type]
 
-    task = repo.create_task(
-        TaskCreate(
-            title="STM32 SPI",
-            topic="SPI",
-            workspace_metadata={"worktree_path": "/tmp/worktrees/impl/t1", "branch_name": "impl/t1"},
-        )
-    )
+    task = repo.create_task(TaskCreate(title="STM32 SPI", topic="SPI"))
 
     assert task["title"] == "STM32 SPI"
     assert client.tables["task_events"][0]["event_type"] == "task_created"
-    assert task["workspace_metadata"]["branch_name"] == "impl/t1"
-    assert client.tables["task_events"][0]["payload"]["workspace_metadata"]["worktree_path"] == "/tmp/worktrees/impl/t1"
-
-
-def test_task_repository_keeps_task_when_event_insert_fails() -> None:
-    class EventFailingClient(FakeSupabaseClient):
-        def request(self, method: str, path: str, **kwargs):  # type: ignore[override]
-            if method.upper() == "POST" and path == "task_events":
-                raise RuntimeError("task_events unavailable")
-            return super().request(method, path, **kwargs)
-
-    client = EventFailingClient({"tasks": [], "task_events": []})
-    repo = TaskRepository(client)  # type: ignore[arg-type]
-
-    task = repo.create_task(TaskCreate(title="Persist task even without events"))
-
-    assert task["title"] == "Persist task even without events"
-    assert client.tables["tasks"][0]["title"] == "Persist task even without events"
-    assert client.tables["task_events"] == []
-
-
-def test_task_repository_omits_empty_workspace_metadata_from_insert() -> None:
-    client = FakeSupabaseClient({"tasks": [], "task_events": []})
-    repo = TaskRepository(client)  # type: ignore[arg-type]
-
-    repo.create_task(TaskCreate(title="No workspace metadata body"))
-
-    create_call = next(call for call in client.calls if call["method"] == "POST" and call["path"] == "tasks")
-    assert "workspace_metadata" not in create_call["body"]
-
-
-def test_task_repository_retries_when_workspace_metadata_is_unknown_to_postgrest() -> None:
-    class WorkspaceMetadataCacheClient(FakeSupabaseClient):
-        def request(self, method: str, path: str, **kwargs):  # type: ignore[override]
-            body = kwargs.get("body") or {}
-            if method.upper() == "POST" and path == "tasks" and "workspace_metadata" in body:
-                raise SupabaseRestError(400, '{"code":"PGRST204","message":"Could not find the workspace_metadata column"}')
-            return super().request(method, path, **kwargs)
-
-    client = WorkspaceMetadataCacheClient({"tasks": [], "task_events": []})
-    repo = TaskRepository(client)  # type: ignore[arg-type]
-
-    task = repo.create_task(
-        TaskCreate(title="Retry without workspace metadata", workspace_metadata={"branch_name": "impl/t1"})
-    )
-
-    assert task["title"] == "Retry without workspace metadata"
-    task_posts = [call for call in client.calls if call["method"] == "POST" and call["path"] == "tasks"]
-    assert len(task_posts) == 2
-    assert "workspace_metadata" in task_posts[0]["body"]
-    assert "workspace_metadata" not in task_posts[1]["body"]
 
 
 def test_task_repository_update_status_records_transition() -> None:

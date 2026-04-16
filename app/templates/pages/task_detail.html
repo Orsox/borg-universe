@@ -6,11 +6,8 @@
 {% block summary %}Status, project, Supabase lookup, history, and result artifacts for this task.{% endblock %}
 {% block page_actions %}
 <a class="button secondary" href="/tasks">Back</a>
-{% if task.workflow_id %}
-<a class="button" href="/tasks/{{ task.id }}/workflow">View Workflow</a>
-{% endif %}
-{% if task.status in ["review_required", "needs_input"] %}
-<a class="button" href="/tasks/{{ task.id }}/review">{{ "Provide input" if task.status == "needs_input" else "Review task" }}</a>
+{% if task.status == "review_required" %}
+<a class="button" href="/tasks/{{ task.id }}/review">Review task</a>
 {% endif %}
 <form class="inline-form" method="post" action="/tasks/{{ task.id }}/queue"><button type="submit">Queue</button></form>
 <form class="inline-form" method="post" action="/tasks/{{ task.id }}/mock-agent-run"><button type="submit" class="secondary">Mock-Agent</button></form>
@@ -25,34 +22,6 @@
         <span class="badge {{ task.status|badge_class }}">{{ task.status }}</span>
       </div>
       <div class="panel-body">
-        {% if error_context %}
-        <div class="callout error">
-          <strong>{{ error_context.event_type }}</strong>
-          <p>{{ error_context.message }}</p>
-          {% if error_context.details %}
-          <pre class="error-details">{{ error_context.details }}</pre>
-          {% endif %}
-          <div class="actions">
-            <form class="inline-form" method="post" action="/tasks/{{ task.id }}/queue">
-              <button type="submit">Retry task</button>
-            </form>
-          </div>
-        </div>
-        {% endif %}
-        {% if needs_input_guidance %}
-        <div class="callout warning">
-          <strong>{{ needs_input_guidance.title }}</strong>
-          <p>{{ needs_input_guidance.summary }}</p>
-          <ol>
-            {% for step in needs_input_guidance.steps %}
-            <li>{{ step }}</li>
-            {% endfor %}
-          </ol>
-          <div class="actions">
-            <a class="button" href="{{ needs_input_guidance.primary_action_href }}">{{ needs_input_guidance.primary_action_label }}</a>
-          </div>
-        </div>
-        {% endif %}
         <form method="post" action="/tasks/{{ task.id }}/status">
           <div class="form-grid">
             <label>Status
@@ -84,9 +53,6 @@
       </div>
     </section>
 
-    {% if task.status == "review_required" %}
-      {% include "partials/compact_review.html" %}
-    {% else %}
     <section class="section panel">
       <div class="panel-header"><h2>History</h2></div>
       <div class="panel-body">
@@ -106,11 +72,9 @@
         </ol>
       </div>
     </section>
-    {% endif %}
   </div>
 
   <aside>
-    {% if task.status != "review_required" %}
     <section class="section panel">
       <div class="panel-header"><h2>Supabase lookup</h2></div>
       <div class="panel-body">
@@ -140,7 +104,6 @@
         </ol>
       </div>
     </section>
-    {% endif %}
   </aside>
 </section>
 {% endblock %}
