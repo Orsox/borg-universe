@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from app.db.supabase_client import SupabaseRestClient
+from app.db.supabase_client import SupabaseRestError
 from app.models.borg import BorgSkill, BorgUnit
 from app.models.knowledge import CodeExampleCreate, KnowledgeEntryCreate, RuleCreate
 from app.models.projects import ProjectCreate
@@ -110,7 +112,7 @@ class TaskRepository:
             query={
                 "select": "*",
                 "status": f"eq.{status}",
-                "order": "created_at.asc",
+                "order": "sequence_index.asc,created_at.asc",
                 "limit": str(limit),
             },
         )
@@ -157,20 +159,42 @@ class TaskRepository:
 
     def create_task(self, task: TaskCreate, initial_status: TaskStatus = "queued") -> dict[str, Any]:
         body = task.model_dump(exclude_none=True)
+        if not body.get("workspace_metadata"):
+            body.pop("workspace_metadata", None)
         body["status"] = initial_status
-        row = self.client.request(
-            "POST",
-            "tasks",
-            query={"select": "*"},
-            body=body,
-            prefer="return=representation",
-        )[0]
-        self.add_event(
-            row["id"],
-            "task_created",
-            "Task created.",
-            {"status": row["status"]},
-        )
+        try:
+            row = self.client.request(
+                "POST",
+                "tasks",
+                query={"select": "*"},
+                body=body,
+                prefer="return=representation",
+            )[0]
+        except SupabaseRestError as exc:
+            if "workspace_metadata" not in str(exc):
+                raise
+            fallback_body = dict(body)
+            fallback_body.pop("workspace_metadata", None)
+            row = self.client.request(
+                "POST",
+                "tasks",
+                query={"select": "*"},
+                body=fallback_body,
+                prefer="return=representation",
+            )[0]
+        try:
+            self.add_event(
+                row["id"],
+                "task_created",
+                "Task created.",
+                {"status": row["status"], "workspace_metadata": row.get("workspace_metadata") or {}},
+            )
+        except Exception as exc:
+            logging.getLogger("borg_universe").warning(
+                "Task %s was created, but the task_created event could not be stored: %s",
+                row.get("id"),
+                exc,
+            )
         return row
 
     def update_status(self, task_id: str, status: TaskStatus) -> dict[str, Any] | None:

@@ -3,7 +3,7 @@
 {% block title %}Agent Selection - Borg Universe{% endblock %}
 {% block eyebrow %}Orchestration{% endblock %}
 {% block heading %}Agent selection{% endblock %}
-{% block summary %}Choose the agent system for local work and keep the default execution target visible for operators.{% endblock %}
+{% block summary %}Choose the execution target that keeps reasoning iterative, project context embedded, and workflow scaling under operator control.{% endblock %}
 {% block page_actions %}
 <a class="button secondary" href="/orchestration/local-model">Local model config</a>
 {% endblock %}
@@ -54,6 +54,19 @@
       <dt>Parallel tasks</dt><dd>{{ settings.execution.max_parallel_tasks }}</dd>
       <dt>Notes</dt><dd>{{ settings.agent_selection.notes or "None" }}</dd>
       <dt>Updated</dt><dd>{{ settings.updated_at or "Never" }}</dd>
+    </dl>
+  </div>
+</section>
+
+<section class="section panel">
+  <div class="panel-header">
+    <h2>Operating principles</h2>
+  </div>
+  <div class="panel-body">
+    <dl class="detail-list">
+      <dt>Agentic reasoning</dt><dd>Use staged execution and low parallelism so plans, review loops, and self-correction stay explicit.</dd>
+      <dt>Domain knowledge</dt><dd>Bind agents to project context, workflow definitions, and tool-backed lookups instead of detached prompt execution.</dd>
+      <dt>Scalable architecture</dt><dd>Keep routing modular, auditable, and cost-aware so new workflows can be added without changing the control model.</dd>
     </dl>
   </div>
 </section>

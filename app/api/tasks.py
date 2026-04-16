@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import json
 import re
-from typing import Annotated
+from typing import Annotated, Any
 from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -458,6 +459,13 @@ async def task_detail(
     cube_files = []
     workflow_stage_options = []
     suggested_resume_stage_index = None
+    actionable_context = _latest_actionable_context(events)
+    error_context = _latest_error_context(events) if task.get("status") == "failed" else None
+    needs_input_guidance = (
+        _build_needs_input_guidance(task, actionable_context)
+        if task.get("status") == "needs_input"
+        else None
+    )
 
     if task.get("status") == "review_required":
         llm_review = _latest_llm_review(events)
@@ -492,6 +500,9 @@ async def task_detail(
             "supabase_configured": settings.supabase_configured,
             "mcp_configured": bool(settings.mcp_server_url),
             "llm_review": llm_review,
+            "actionable_context": actionable_context,
+            "error_context": error_context,
+            "needs_input_guidance": needs_input_guidance,
             "cube_files": cube_files,
             "workflow_stage_options": workflow_stage_options,
             "suggested_resume_stage_index": suggested_resume_stage_index,
@@ -611,9 +622,15 @@ async def review_task(
     llm_review = _latest_llm_review(events)
     llm_transcript = _build_llm_transcript(events)
     llm_human_output = _latest_llm_human_output(events, llm_transcript, llm_review)
+    actionable_context = _latest_actionable_context(events)
+    needs_input_guidance = (
+        _build_needs_input_guidance(task, actionable_context)
+        if task.get("status") == "needs_input"
+        else None
+    )
     workflow_stage_options = _workflow_stage_options(workflow_store, task.get("workflow_id"))
     review_stage_state = _review_stage_state(workflow_store, repo, task_id, events)
-    if task.get("status") != "review_required" or (
+    if task.get("status") not in {"review_required", "needs_input"} or (
         review_stage_state
         and bool(review_stage_state.get("committed"))
     ):
@@ -635,6 +652,8 @@ async def review_task(
             "llm_review": llm_review,
             "llm_transcript": llm_transcript,
             "llm_human_output": llm_human_output,
+            "actionable_context": actionable_context,
+            "needs_input_guidance": needs_input_guidance,
             "projects": projects,
             "project_labels": project_labels,
             "workflow_labels": workflow_labels,
@@ -1128,3 +1147,115 @@ def _latest_llm_human_output(
     if llm_review:
         return llm_review.get("summary", "")
     return ""
+
+
+def _latest_error_context(events: list[dict[str, object]]) -> dict[str, Any] | None:
+    error_types = {
+        "worker_failed",
+        "llm_processing_failed",
+        "workflow_node_failed",
+        "command_gate_failed",
+    }
+    for event in reversed(events):
+        event_type = str(event.get("event_type") or "")
+        if event_type not in error_types:
+            continue
+        payload = event.get("payload") or {}
+        details = ""
+        if isinstance(payload, dict) and payload:
+            details = json.dumps(payload, ensure_ascii=True, indent=2)
+        return {
+            "event_type": event_type,
+            "message": str(event.get("message") or "").strip(),
+            "details": details,
+            "created_at": str(event.get("created_at") or "").strip(),
+            "payload": payload if isinstance(payload, dict) else {},
+        }
+    return None
+
+
+def _latest_actionable_context(events: list[dict[str, object]]) -> dict[str, Any] | None:
+    actionable_types = {
+        "project_context_missing",
+        "input_requested",
+        "review_required",
+        "workflow_review_required",
+        "llm_processing_failed",
+        "worker_failed",
+    }
+    for event in reversed(events):
+        event_type = str(event.get("event_type") or "")
+        if event_type not in actionable_types:
+            continue
+        payload = event.get("payload") or {}
+        details = ""
+        if isinstance(payload, dict) and payload:
+            details = json.dumps(payload, ensure_ascii=True, indent=2)
+        return {
+            "event_type": event_type,
+            "message": str(event.get("message") or "").strip(),
+            "details": details,
+            "created_at": str(event.get("created_at") or "").strip(),
+            "payload": payload if isinstance(payload, dict) else {},
+        }
+    return None
+
+
+def _build_needs_input_guidance(
+    task: dict[str, object],
+    actionable_context: dict[str, Any] | None,
+) -> dict[str, object]:
+    event_type = str((actionable_context or {}).get("event_type") or "")
+    payload = (actionable_context or {}).get("payload") or {}
+    reason = ""
+    if isinstance(payload, dict):
+        reason = str(payload.get("reason") or payload.get("error") or "").strip()
+
+    summary = "The worker is paused and needs human input before it can continue."
+    steps = [
+        "Read the latest worker context to see what is missing.",
+        "Update task fields if metadata is incorrect (path, platform, board, or title).",
+        "Write the answer or decision in Review notes.",
+        "Click Confirm and continue to resume processing.",
+    ]
+
+    if event_type == "project_context_missing" or reason == "sparse_project_context":
+        summary = "Project context is incomplete, so the worker cannot derive the next implementation step."
+        steps = [
+            "Check Local path and ensure it points to the correct project root.",
+            "Add the missing context in Review notes (project structure, goal, and constraints).",
+            "Update Platform/MCU/Board fields if they are empty or wrong.",
+            "Click Confirm and continue to rerun with the new context.",
+        ]
+    elif reason == "file_access_blocker":
+        summary = "The worker could not access required files."
+        steps = [
+            "Verify Local path exists and is reachable from this environment.",
+            "Confirm the required files are present in that path.",
+            "Document what was fixed or where the files are in Review notes.",
+            "Click Confirm and continue to retry.",
+        ]
+    elif event_type == "input_requested":
+        summary = "A direct question from the workflow is waiting for your answer."
+        steps = [
+            "Read the worker message and details to capture the exact question.",
+            "Answer the question clearly in Review notes.",
+            "Adjust task fields only if the answer changes project metadata.",
+            "Click Confirm and continue to pass your answer to the workflow.",
+        ]
+    elif event_type in {"llm_processing_failed", "worker_failed"}:
+        summary = "Execution failed and needs a human decision for the next retry."
+        steps = [
+            "Inspect error details in Current worker context.",
+            "Provide a corrective instruction in Review notes.",
+            "Apply any needed metadata fixes directly in the form.",
+            "Click Confirm and continue to retry with your guidance.",
+        ]
+
+    return {
+        "title": "Human input required",
+        "summary": summary,
+        "steps": steps,
+        "primary_action_label": "Provide input now",
+        "primary_action_href": f"/tasks/{task.get('id')}/review",
+    }

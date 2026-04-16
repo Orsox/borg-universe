@@ -1,0 +1,279 @@
+id: new_workflow_harness
+title: New Workflow Harness
+description: Design, review, materialize, and validate a new Borg workflow under BORG/workflows, including role mapping, task prompts, and deterministic validation gates.
+status: defined
+entry_node: workflow-intake
+nodes:
+  - id: workflow-intake
+    borg_name: Workflow Intake
+    role: coordinator
+    agent: borg-queen-architect
+    tasks:
+      - id: normalize-workflow-scope
+        title: Normalize new workflow scope
+        prompt: >-
+          The user wants to create a new workflow with the following description:
+          {{task.description}}
+
+          Identify the target workflow domain, trigger conditions, required inputs,
+          expected outputs, safety boundaries, validation needs, and whether the
+          request creates a new workflow or updates an existing one. Keep the
+          workflow aligned with the shared Borg harness phases.
+          IMPORTANT: This process is for direct workflow generation. Do NOT plan
+          for or create any borg-cube.md specification files. The goal is the
+          immediate creation of the .yaml workflow file and supporting agents/skills.
+        status: queued
+  - id: git-prepare-architecture
+    borg_name: Git Prepare Architecture Workspace
+    role: workspace_orchestrator
+    agent: borg-git-orchestrator
+    tasks:
+      - id: prepare-workflow-architecture-worktree
+        title: Prepare isolated workflow architecture worktree
+        prompt: >-
+          Prepare an isolated architecture worktree before workflow files are
+          materialized. Record workflow_id, branch_name, worktree_path,
+          base_branch, base_commit, retry_index, and lifecycle_state=prepared.
+          Use branch pattern queen/<workflow-id>/architecture-v<retry> and
+          worktree pattern .worktrees/<workflow-id>/queen-architecture-v<retry>.
+        status: draft
+  - id: workflow-architect
+    borg_name: Workflow Architect
+    role: architect
+    agent: borg-workflow-generator
+    tasks:
+      - id: draft-workflow-definition
+        title: Draft workflow, agents, and skills files
+        prompt: >-
+          Based on the user's description and the normalized scope, generate a
+          concrete workflow definition under BORG/workflows/, and any required
+          new agent definitions in agents/ and skill structures in skills/.
+          Return workflow_files with safe relative paths and full file
+          contents. The workflow YAML must define id, title, description,
+          status, entry_node, nodes, and steps. 
+          STRICT RULE: Do NOT create borg-cube.md files, spec/ directories, 
+          or any other specification artifacts. Only create the executable 
+          workflow infra (.yaml, agent .md, skill folders). 
+          Use the prepared architecture workspace metadata and operate only 
+          inside that worktree.
+          IMPORTANT: You MUST write the files to the disk in the current worktree
+          using your Write/Edit tools before finishing the task.
+        status: draft
+  - id: git-finalize-architecture
+    borg_name: Git Finalize Architecture Workspace
+    role: workspace_orchestrator
+    agent: borg-git-orchestrator
+    tasks:
+      - id: finalize-workflow-architecture-worktree
+        title: Finalize workflow architecture worktree
+        prompt: >-
+          Finalize the active architecture worktree after workflow generation.
+          Capture head_commit, git status, generated file summary (workflows,
+          agents, skills), and set the workspace lifecycle to reviewable.
+        status: draft
+  - id: git-sync-architecture
+    borg_name: Git Sync Architecture to Main
+    role: workspace_orchestrator
+    agent: borg-git-orchestrator
+    tasks:
+      - id: sync-workflow-architecture
+        title: Sync architecture changes to main branch
+        prompt: >-
+          Safely sync (merge) the architecture branch into the main branch
+          so the new workflow files become visible in the primary repository.
+        status: draft
+  - id: workflow-review
+    borg_name: Workflow Review
+    role: reviewer
+    agent: borg-workflow-reviewer
+    tasks:
+      - id: review-workflow-definition
+        title: Review workflow, agents, and skills quality
+        prompt: >-
+          Review the generated workflow definition, agent personas, and skill
+          structures for naming consistency, phase completeness, role
+          separation, and architectural alignment. Ensure NO borg-cube.md files
+          were created. Return a review report and set retry_required if
+          corrections are needed.
+        status: draft
+  - id: workflow-disassembly
+    borg_name: Workflow Task Disassembly
+    role: task_planner
+    agent: borg-disassembler
+    tasks:
+      - id: split-workflow-implementation
+        title: Split workflow work into small implementation tasks
+        prompt: >-
+          Convert the approved workflow definition into small
+          dependency-aware implementation_tasks. Each prompt must start with
+          <nano-implant>, cover exactly one workflow-related change (e.g. creating 
+          one agent .md, one skill, or the workflow .yaml), and include
+          focused verification such as YAML shape checks, prompt review, or
+          deterministic command gates. 
+          STRICT RULE: Do NOT reference borg-cube.md or ask implementation drones 
+          to create specification files. All tasks must focus on the workflow 
+          infrastructure files only.
+          Also specify that each implementation task requires a prepared task 
+          worktree before execution.
+        status: draft
+  - id: implementation-trigger
+    borg_name: Implementation Trigger
+    role: implementation_trigger
+    agent: borg-disassembler
+    tasks:
+      - id: trigger-workflow-implementation
+        title: Queue approved workflow implementation tasks
+        prompt: >-
+          Queue stored implementation_tasks for borg-implementation-drone. Do
+          not create new tasks and do not implement in this parent workflow
+          task.
+        status: draft
+  - id: git-prepare-implementation-task
+    borg_name: Git Prepare Implementation Task Workspace
+    role: workspace_orchestrator
+    agent: borg-git-orchestrator
+    tasks:
+      - id: prepare-workflow-implementation-worktree
+        title: Prepare isolated implementation task worktree
+        prompt: >-
+          Prepare an isolated implementation worktree for exactly one approved
+          workflow task. Record task_id, workflow_id, approved_spec_revision,
+          source_branch, branch_name, worktree_path, base_commit, and
+          lifecycle_state=prepared. Use branch pattern impl/<task-id> and
+          worktree pattern .worktrees/impl/<task-id>.
+        status: draft
+  - id: implementation-drone
+    borg_name: Workflow Implementation Drone
+    role: implementer
+    agent: borg-implementation-drone
+    tasks:
+      - id: implement-workflow-task
+        title: Implement one queued workflow task
+        prompt: >-
+          Execute exactly one queued workflow implementation task at a time. The
+          prompt must start with <nano-implant>. Require prepared task workspace
+          metadata, do not merge tasks, and do not expand beyond the approved
+          workflow scope.
+          IMPORTANT: You MUST write the changes to the disk in the current worktree
+          using your tools before finishing the task.
+        status: draft
+  - id: git-finalize-implementation-task
+    borg_name: Git Finalize Implementation Task Workspace
+    role: workspace_orchestrator
+    agent: borg-git-orchestrator
+    tasks:
+      - id: finalize-workflow-implementation-worktree
+        title: Finalize workflow implementation task worktree
+        prompt: >-
+          Finalize the active implementation task worktree after exactly one
+          task run. Capture changed files, head_commit, git status, validation
+          outcome, and decide whether the workspace is reviewable, archived, or
+          retained for follow-up review.
+        status: draft
+  - id: git-sync-implementation
+    borg_name: Git Sync Implementation to Main
+    role: workspace_orchestrator
+    agent: borg-git-orchestrator
+    tasks:
+      - id: sync-workflow-implementation
+        title: Sync implementation changes to main branch
+        prompt: >-
+          Safely sync (merge) the implementation branch into the main branch.
+        status: draft
+  - id: workflow-validation
+    borg_name: Workflow Validation Gates
+    role: verifier
+    agent: borg-workflow-reviewer
+    tasks:
+      - id: workflow-required-keys
+        title: Check required workflow keys
+        prompt: Ensure every workflow YAML under BORG/workflows contains the required top-level keys.
+        commands:
+          - id: verify-required-keys
+            run: >-
+              python3 -c "from pathlib import Path; import sys;
+              required=('id:','title:','description:','status:','entry_node:','nodes:','steps:');
+              bad=[]; files=sorted(Path('BORG/workflows').glob('*.yaml'));
+              [bad.append(f'{p}: missing {key}') for p in files for key in required if key not in p.read_text()];
+              print('\\n'.join(bad)) if bad else print(f'validated {len(files)} workflow files');
+              sys.exit(1 if bad else 0)"
+            timeout_seconds: 120
+      - id: workflow-node-step-shape
+        title: Check workflow node and step markers
+        prompt: Ensure workflow YAML files define node identifiers and at least one step.
+        commands:
+          - id: verify-node-step-shape
+            run: >-
+              python3 -c "from pathlib import Path; import re, sys; bad=[];
+              files=sorted(Path('BORG/workflows').glob('*.yaml'));
+              pattern_node=re.compile(r'^\\s*- id:\\s+', re.M);
+              pattern_steps=re.compile(r'^steps:\\s*$', re.M);
+              [bad.append(f'{p}: missing node id entries') for p in files if len(pattern_node.findall(p.read_text())) == 0];
+              [bad.append(f'{p}: missing steps section') for p in files if not pattern_steps.search(p.read_text())];
+              print('\\n'.join(bad)) if bad else print(f'shape ok for {len(files)} workflow files');
+              sys.exit(1 if bad else 0)"
+            timeout_seconds: 120
+  - id: workflow-handoff
+    borg_name: Workflow Review Handoff
+    role: reviewer
+    agent: borg-requirement-node
+    tasks:
+      - id: review-workflow-output
+        title: Review workflow outputs and residual risks
+        prompt: >-
+          Review the generated workflow files, command-gate logs, remaining
+          ambiguity, and follow-up work such as prompt extraction, manifests, or
+          Git automation. Produce a compact handoff with findings and next
+          actions.
+        status: draft
+steps:
+  - id: intake-phase
+    title: Workflow scope intake
+    mode: sequential
+    nodes:
+      - workflow-intake
+  - id: architecture-phase
+    title: Workflow architecture and file drafting
+    mode: sequential
+    nodes:
+      - git-prepare-architecture
+      - workflow-architect
+      - git-finalize-architecture
+      - git-sync-architecture
+  - id: review-phase
+    title: Workflow definition review
+    mode: sequential
+    nodes:
+      - workflow-review
+    retry:
+      condition: nodes['workflow-review'].output.retry_required == true
+      max_attempts: 3
+      target_node: git-prepare-architecture
+      message: 'Issues found in generated workflow, agents, or skills. Correct them based on this review: {{nodes[''workflow-review''].output.issues}}'
+  - id: disassembly-phase
+    title: Workflow task disassembly
+    mode: sequential
+    nodes:
+      - workflow-disassembly
+  - id: implementation-trigger-phase
+    title: Trigger workflow implementation tasks
+    mode: sequential
+    nodes:
+      - implementation-trigger
+  - id: implementation-phase
+    title: Implement workflow tasks one by one
+    mode: sequential
+    nodes:
+      - git-prepare-implementation-task
+      - implementation-drone
+      - git-finalize-implementation-task
+  - id: validation-phase
+    title: Deterministic workflow validation
+    mode: sequential
+    nodes:
+      - workflow-validation
+  - id: handoff-phase
+    title: Workflow review handoff
+    mode: sequential
+    nodes:
+      - workflow-handoff

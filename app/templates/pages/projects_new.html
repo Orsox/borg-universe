@@ -8,6 +8,61 @@
 <a class="button secondary" href="/">Back</a>
 {% endblock %}
 
+{% block notices %}
+{{ super() }}
+<style>
+  .path-input {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: stretch;
+  }
+  .path-prefix {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 14px;
+    border: 1px solid var(--line);
+    border-right: 0;
+    border-radius: var(--radius) 0 0 var(--radius);
+    background: var(--surface-muted);
+    color: var(--text-muted);
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
+    white-space: nowrap;
+  }
+  .path-input input {
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+  }
+  .path-hint {
+    display: block;
+    margin-top: 8px;
+    color: var(--text-muted);
+    font-size: 0.92rem;
+  }
+  .path-preview {
+    display: block;
+    margin-top: 8px;
+    color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
+    font-size: 0.92rem;
+  }
+  @media (max-width: 640px) {
+    .path-input {
+      grid-template-columns: 1fr;
+    }
+    .path-prefix {
+      border-right: 1px solid var(--line);
+      border-bottom: 0;
+      border-radius: var(--radius) var(--radius) 0 0;
+    }
+    .path-input input {
+      border-top-left-radius: 0;
+      border-top-right-radius: 0;
+      border-bottom-left-radius: var(--radius);
+    }
+  }
+</style>
+{% endblock %}
+
 {% block content %}
 <section class="section panel">
   <div class="panel-header">
@@ -34,7 +89,17 @@
           <textarea name="description" rows="4" placeholder="Project facts, target, repository, board, or runtime context"></textarea>
         </label>
         <label class="full">Project directory
-          <input name="project_directory" maxlength="500" placeholder="D:\Workbench\firststart">
+          <select name="project_directory_parent" aria-label="Project parent directory" data-project-parent>
+            {% for option in project_directory_options %}
+            <option value="{{ option }}">{{ option or "." }}</option>
+            {% endfor %}
+          </select>
+          <div class="path-input">
+            <span class="path-prefix">{{ project_directory_prefix }}</span>
+            <input name="project_directory_name" maxlength="240" placeholder="firststart" aria-label="Project directory name" data-project-name>
+          </div>
+          <small class="path-hint">Wahle erst den Unterordner unter <code>{{ project_directory_prefix }}</code> und trage dann den neuen Projektordnernamen ein.</small>
+          <code class="path-preview" data-project-preview>{{ project_directory_prefix }}</code>
         </label>
         <label class="check-option full">
           <input type="checkbox" name="pycharm_mcp_enabled">
@@ -57,4 +122,34 @@
     </form>
   </div>
 </section>
+<script>
+  (() => {
+    const parentSelect = document.querySelector("[data-project-parent]");
+    const nameInput = document.querySelector("[data-project-name]");
+    const preview = document.querySelector("[data-project-preview]");
+    const prefix = {{ project_directory_prefix|tojson }};
+
+    if (!parentSelect || !nameInput || !preview) {
+      return;
+    }
+
+    const joinPath = (...segments) => {
+      const cleaned = segments.filter(Boolean).map((segment) => String(segment).replace(/^[/\\\\]+|[/\\\\]+$/g, ""));
+      if (!cleaned.length) {
+        return prefix;
+      }
+      const separator = prefix.includes("\\\\") ? "\\" : "/";
+      const base = prefix.replace(/[/\\\\]+$/, "");
+      return [base, ...cleaned].join(separator);
+    };
+
+    const renderPreview = () => {
+      preview.textContent = joinPath(parentSelect.value, nameInput.value);
+    };
+
+    parentSelect.addEventListener("change", renderPreview);
+    nameInput.addEventListener("input", renderPreview);
+    renderPreview();
+  })();
+</script>
 {% endblock %}

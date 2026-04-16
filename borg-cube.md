@@ -9,7 +9,7 @@
 | Status | draft |
 | Owner | Borg Collective |
 | Primary Area | `BORG/workflows` |
-| Last Updated | 2026-04-14 |
+| Last Updated | 2026-04-16 |
 
 ## Goal
 
@@ -17,6 +17,12 @@ The root specification defines Borg Universe as an agentic workflow harness. The
 
 The goal is a way of working in which specialized agents cooperate like a developer team with different roles: a 
 coordinating entry point, clearly separated specialist roles, iterative refinement, deterministic validation, and a traceable Git-based closeout for every change.
+
+The harness is guided by three project principles:
+
+1. Agentic reasoning through planning, iterative feedback, and explicit self-evaluation instead of one-shot reactions.
+2. Domain knowledge integration by embedding framework, project, and tool context directly into autonomous execution paths.
+3. Scalable architecture through modular workflows, auditable interfaces, and maintainable orchestration boundaries.
 
 ## Scope
 
@@ -50,6 +56,26 @@ coordinating entry point, clearly separated specialist roles, iterative refineme
 - Tool- and MCP-oriented extensibility, where agents receive capabilities through structured interfaces instead of implicit ad hoc logic.
 - A builder pattern with reusable stages for planning, execution, validation, and operational closeout.
 
+## Design Principles
+
+### Agentic Reasoning
+
+- The harness treats planning, decomposition, review, and resume as first-class workflow phases.
+- Human input and review checkpoints are part of the reasoning loop, not exceptions outside the system.
+- Validation evidence and workflow events must support self-evaluation before closeout.
+
+### Domain Knowledge Integration
+
+- Workflow execution must be grounded in project context, manifests, rules, and skill-backed tool access.
+- Domain workflows may specialize their validation and execution stages, but must remain connected to the shared control model.
+- MCP-backed lookups and structured project knowledge are preferred over generic ungrounded execution.
+
+### Scalable Architecture
+
+- New workflows, agents, and skills must be addable without rewriting the root orchestration model.
+- Execution boundaries must remain modular, auditable, and cost-aware.
+- Safety, maintainability, and ethical review points are part of the architecture, not a post-processing concern.
+
 ## Submodules / Internal Structure
 
 ### Root Harness Components
@@ -57,6 +83,7 @@ coordinating entry point, clearly separated specialist roles, iterative refineme
 | Path | Purpose |
 |---|---|
 | `BORG/workflows/new_borg_cube_project.yaml` | Project setup, spec generation, disassembly, and sequential implementation. |
+| `BORG/workflows/new_workflow_harness.yaml` | Meta-harness for designing, reviewing, materializing, and validating new Borg workflow definitions. |
 | `BORG/workflows/borg-assimilation.yaml` | Analysis of existing projects, review, and synthesis of cube files without changing source code. |
 | `BORG/workflows/python_tooling_harness.yaml` | Harness for Python tools, CLIs, libraries, tests, and host automation. |
 | `BORG/workflows/stm32_nordic_harness.yaml` | Harness for STM32 and Nordic projects with deterministic build gates. |
@@ -95,6 +122,7 @@ The agent harness spans all domain workflows and defines a shared control flow:
 | FR-10 | Agent-guided commits must reference at least the workflow context, the affected subtask, and the validation status. |
 | FR-11 | The harness must preserve results, assumptions, risks, and required manual follow-up actions in a compact handoff. |
 | FR-12 | The harness must allow new domain workflows to be added without breaking the shared control model. |
+| FR-13 | The harness must make the three core principles visible in root documentation and operator-facing surfaces. |
 
 ## Non-Functional Requirements
 
@@ -106,6 +134,7 @@ The agent harness spans all domain workflows and defines a shared control flow:
 | NFR-4 | Domain-specific validation must be deterministic and adapted to the relevant stack. |
 | NFR-5 | The harness should be extendable in a modular way without tightly coupling existing workflows. |
 | NFR-6 | The overall process should remain manageable with few parallel tasks and minimize conflict surface area. |
+| NFR-7 | Operator-facing orchestration should reinforce maintainability, cost control, and explicit review boundaries. |
 
 ## Constraints
 

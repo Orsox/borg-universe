@@ -1,9 +1,23 @@
 id: borg-assimilation
 title: Borg Assimilation
 description: Scan an existing project, generate project and module borg-cube specifications, review them, and stop without changing source code.
-status: queued
+status: defined
 entry_node: spec-assimilator
 nodes:
+  - id: git-prepare-architecture
+    borg_name: Git Prepare Assimilation Workspace
+    role: workspace_orchestrator
+    agent: borg-git-orchestrator
+    tasks:
+      - id: prepare-assimilation-worktree
+        title: Prepare isolated assimilation worktree
+        prompt: >-
+          Prepare an isolated architecture worktree before borg-cube specs are
+          materialized for assimilation. Record workflow_id, branch_name,
+          worktree_path, base_branch, base_commit, retry_index, and
+          lifecycle_state=prepared using the architecture branch and worktree
+          naming pattern.
+        status: draft
   - id: spec-assimilator
     borg_name: Spec Assimilator
     role: assimilator
@@ -18,6 +32,21 @@ nodes:
           - Do not modify source code or configuration
           - Mark all weak evidence as assumptions
           - Set materialize_borg_cube_files to true
+          - Use the prepared architecture workspace metadata from the git
+            prepare node and operate only inside that worktree
+        status: draft
+  - id: git-finalize-architecture
+    borg_name: Git Finalize Assimilation Workspace
+    role: workspace_orchestrator
+    agent: borg-git-orchestrator
+    tasks:
+      - id: finalize-assimilation-worktree
+        title: Finalize assimilation worktree
+        prompt: >-
+          Finalize the active assimilation worktree after borg-cube outputs are
+          prepared. Capture head_commit, git status, generated file summary, and
+          set the workspace lifecycle to reviewable when outputs exist. Preserve
+          prior retry attempts for review comparison.
         status: draft
   - id: requirement-node
     borg_name: Requirement Node
@@ -32,6 +61,7 @@ nodes:
           Constraints:
           - Ensure root borg-cube.md references all module specs correctly
           - No implementation leakage allowed
+          - Review the finalized architecture workspace in read-only mode by default
           - Return corrected borg_cube_specs if fixes are required
         status: draft
   - id: human-review-node
@@ -100,7 +130,9 @@ steps:
     title: Scan existing project
     mode: sequential
     nodes:
+      - git-prepare-architecture
       - spec-assimilator
+      - git-finalize-architecture
   - id: spec-review
     title: Automated specification review
     mode: sequential
@@ -109,7 +141,7 @@ steps:
     retry:
       condition: nodes['requirement-node'].output.retry_required == true
       max_attempts: 2
-      target_node: spec-assimilator
+      target_node: git-prepare-architecture
       message: 'Specification issues found. Regenerate the project and module borg_cube_specs based on this review: {{nodes[''requirement-node''].output.errors}}'
   - id: human-review
     title: Human-in-the-Loop Review

@@ -141,9 +141,14 @@ create table if not exists public.tasks (
   requested_by text,
   assigned_agent text,
   assigned_skill text,
+  sequence_index integer not null default 0,
+  workspace_metadata jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.tasks
+add column if not exists sequence_index integer not null default 0;
 
 alter table public.tasks
 add column if not exists project_id text;
@@ -156,6 +161,9 @@ add column if not exists local_path text;
 
 alter table public.tasks
 add column if not exists pycharm_mcp_enabled boolean not null default false;
+
+alter table public.tasks
+add column if not exists workspace_metadata jsonb not null default '{}'::jsonb;
 
 create table if not exists public.task_events (
   id uuid primary key default extensions.gen_random_uuid(),
@@ -218,7 +226,7 @@ before update on public.project_specs
 for each row
 execute function public.set_updated_at();
 
-create index if not exists idx_tasks_status_created_at on public.tasks(status, created_at desc);
+create index if not exists idx_tasks_status_sequence_created on public.tasks(status, sequence_index asc, created_at desc);
 create index if not exists idx_tasks_workflow_id on public.tasks(workflow_id);
 create index if not exists idx_task_events_task_id_created_at on public.task_events(task_id, created_at asc);
 create index if not exists idx_project_specs_project_id on public.project_specs(project_id);

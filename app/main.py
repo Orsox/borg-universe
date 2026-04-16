@@ -1,4 +1,5 @@
 import logging
+import ntpath
 import os
 import re
 import shutil
@@ -6,7 +7,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
 
-from fastapi import FastAPI, Request
+from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -15,6 +16,7 @@ from app.api.router import api_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.db.repositories import (
+    ArtifactRepository,
     BorgRegistryRepository,
     ProjectRegistryBindingRepository,
     ProjectRepository,
@@ -24,6 +26,7 @@ from app.db.repositories import (
 from app.db.supabase_client import SupabaseRestClient, SupabaseRestError
 from app.models.projects import PROJECT_TYPES, ProjectCreate
 from app.models.tasks import TaskCreate
+from app.services.agent_worker import AgentWorker
 from app.services.orchestration_settings_store import OrchestrationSettingsStore
 from app.services.project_scanner import scan_drive_for_projects
 from app.services.workflow_store import WorkflowStore
@@ -43,6 +46,7 @@ def create_app() -> FastAPI:
 
     def get_ui_context(client: SupabaseRestClient | None = None) -> dict[str, Any]:
         """Provides common UI context data like sidebar counts."""
+        workbench_status = getattr(app.state, "workbench_status", settings.workbench_status)
         if client is None:
             try:
                 client = SupabaseRestClient(settings)
@@ -51,6 +55,9 @@ def create_app() -> FastAPI:
                 return {
                     "agent_count": 0, "skill_count": 0, "task_count": 0, "workflow_count": 0,
                     "system_status": "intervention", "supabase_configured": False, "mcp_configured": False,
+                    "workbench_valid": workbench_status.valid,
+                    "workbench_path": str(workbench_status.path),
+                    "workbench_message": workbench_status.message,
                 }
         
         try:
@@ -73,6 +80,9 @@ def create_app() -> FastAPI:
             "system_status": "configured" if settings.supabase_configured else "intervention",
             "supabase_configured": settings.supabase_configured,
             "mcp_configured": bool(settings.mcp_server_url),
+            "workbench_valid": workbench_status.valid,
+            "workbench_path": str(workbench_status.path),
+            "workbench_message": workbench_status.message,
         }
 
     # Export for other routers
@@ -81,6 +91,9 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     async def startup_event() -> None:
         logger = logging.getLogger("borg_universe")
+        app.state.workbench_status = settings.workbench_status
+        if not app.state.workbench_status.valid and app.state.workbench_status.message:
+            logger.warning("Workbench validation failed during startup: %s", app.state.workbench_status.message)
         if settings.supabase_configured:
             logger.info("Initializing Borg Universe: scanning agents and skills...")
             try:
@@ -167,6 +180,7 @@ def create_app() -> FastAPI:
             "active": "home",
             "agents_root_name": settings.agents_root.name,
             "skills_root_name": settings.skills_root.name,
+            "workbench_root_name": settings.workbench_root.name,
             "environment": settings.environment,
             "app_version": settings.app_version,
             "projects": projects,
@@ -202,6 +216,8 @@ def create_app() -> FastAPI:
         ctx.update({
             "active": "home",
             "project_types": PROJECT_TYPES,
+            "project_directory_prefix": _project_directory_prefix(settings.workbench_root),
+            "project_directory_options": _workbench_directory_options(settings.workbench_root),
         })
         return templates.TemplateResponse(request, "pages/projects_new.html", ctx)
 
@@ -401,15 +417,22 @@ def create_app() -> FastAPI:
         return RedirectResponse("/tasks", status_code=303)
 
     @app.post("/projects", tags=["system"])
-    async def create_project(request: Request) -> RedirectResponse:
+    async def create_project(request: Request, background_tasks: BackgroundTasks) -> RedirectResponse:
         form = await _read_urlencoded_form(request)
         name = form.get("name", "").strip()
+        directory_name = form.get("project_directory_name", "").strip()
+        parent_directory = form.get("project_directory_parent", "").strip()
         project = ProjectCreate(
             id=_slugify_project_id(form.get("id") or name),
             name=name,
             description=form.get("description", "").strip(),
             project_type=form.get("project_type", "stm").strip() or "stm",
-            project_directory=form.get("project_directory", "").strip(),
+            project_directory=_build_project_directory(
+                settings.workbench_root,
+                parent_directory,
+                directory_name,
+                form.get("project_directory", "").strip(),
+            ),
             pycharm_mcp_enabled=form.get("pycharm_mcp_enabled") == "on",
             pycharm_mcp_sse_url=_optional(form.get("pycharm_mcp_sse_url")),
             pycharm_mcp_stream_url=_optional(form.get("pycharm_mcp_stream_url")),
@@ -419,7 +442,66 @@ def create_app() -> FastAPI:
             default_topic=_optional(form.get("default_topic")),
             active=True,
         )
-        ProjectRepository(SupabaseRestClient(settings)).create_project(project)
+        client = SupabaseRestClient(settings)
+        project_row = ProjectRepository(client).create_project(project)
+        agent_names = [str(item.get("name") or "").strip() for item in BorgRegistryRepository(client, "agents").list_items()]
+        skill_names = [str(item.get("name") or "").strip() for item in BorgRegistryRepository(client, "skills").list_items()]
+        unit_bindings = (
+            [{"name": name, "type": "agent"} for name in agent_names if name]
+            + [{"name": name, "type": "skill"} for name in skill_names if name]
+        )
+        _bind_project_units_if_available(client, project.id, unit_bindings)
+        _copy_project_units_to_claude(
+            settings=settings,
+            project=project_row,
+            project_id=project.id,
+            agent_names=agent_names,
+            skill_names=skill_names,
+        )
+        try:
+            task_description = project.description.strip() or f"Create the initial project specification and scaffold for {project.name}."
+            created_task = TaskRepository(client).create_task(
+                TaskCreate(
+                    title=f"{project.name} - New Borg Cube Project"[:200],
+                    description=task_description,
+                    project_id=project_row.get("id"),
+                    workflow_id="new_borg_cube_project",
+                    target_platform=project.default_platform,
+                    target_mcu=project.default_mcu,
+                    board=project.default_board,
+                    local_path=project.project_directory or None,
+                    pycharm_mcp_enabled=project.pycharm_mcp_enabled,
+                    topic=project.default_topic,
+                    requested_by="Project Setup",
+                    assigned_agent="local-llm",
+                    assigned_skill="new_borg_cube_project",
+                )
+            )
+            try:
+                TaskRepository(client).add_event(
+                    created_task["id"],
+                    "workflow_selected",
+                    "Workflow selected for local LLM processing.",
+                    {
+                        "workflow_id": "new_borg_cube_project",
+                        "workflow_title": "New Borg Cube Project",
+                        "agent": "local-llm",
+                        "source": "project_create",
+                    },
+                )
+            except Exception as exc:
+                logging.getLogger("borg_universe").warning(
+                    "Initial task %s was created, but workflow_selected could not be stored: %s",
+                    created_task.get("id"),
+                    exc,
+                )
+            background_tasks.add_task(_start_task_processing, settings, created_task["id"])
+        except Exception as exc:
+            logging.getLogger("borg_universe").exception(
+                "Project %s was created, but the initial workflow task could not be created: %s",
+                project.id,
+                exc,
+            )
         return RedirectResponse("/projects/new", status_code=303)
 
     @app.post("/projects/{project_id}/bind", tags=["system"])
@@ -435,102 +517,18 @@ def create_app() -> FastAPI:
             units.append({"name": name, "type": "skill"})
             
         client = SupabaseRestClient(settings)
-        repo = ProjectRegistryBindingRepository(client)
         project_repo = ProjectRepository(client)
         
         try:
-            repo.unbind_all(project_id)
-            if units:
-                repo.bind_units(project_id, units)
-        except SupabaseRestError as exc:
-            if _is_missing_project_registry_bindings_table(exc):
-                logging.getLogger("borg_universe").warning(
-                    "project_registry_bindings table is missing. Continuing with filesystem copy only."
-                )
-            else:
-                logging.getLogger("borg_universe").error(f"Error binding units: {exc}")
-                return RedirectResponse("/projects", status_code=303)
-
-        try:
             project = project_repo.get_project(project_id)
-            if project:
-                project_dir = project.get("project_directory", "").strip()
-                if not project_dir:
-                    logging.getLogger("borg_universe").warning(f"Project {project_id} has no project_directory set. Skipping copy to .claude.")
-                else:
-                    base_path = _resolve_project_runtime_root(project_dir)
-                    if base_path is None:
-                        raise RuntimeError(
-                            "Project directory is not accessible from the running service. "
-                            "Check WORKBENCH_HOST_ROOT / WORKBENCH_CONTAINER_ROOT and the Docker volume mount."
-                        )
-                    logging.getLogger("borg_universe").info(f"Base path for .claude: {base_path}")
-                    claude_dir = base_path / ".claude"
-
-                    # Keep the layout compatible with Claude Code project-local assets.
-                    agents_dir = claude_dir / "agents"
-                    skills_dir = claude_dir / "skills"
-                    agents_dir.mkdir(parents=True, exist_ok=True)
-                    skills_dir.mkdir(parents=True, exist_ok=True)
-                    logging.getLogger("borg_universe").info(f"Target .claude directory: {claude_dir}")
-
-                    # Copy agents
-                    for name in agent_names:
-                        source_file = settings.agents_root.absolute() / f"{name}.md"
-                        logging.getLogger("borg_universe").info(f"Trying to copy agent {name} from {source_file}")
-                        if source_file.exists():
-                            target_file = agents_dir / f"{name}.md"
-                            shutil.copy2(source_file, target_file)
-                            logging.getLogger("borg_universe").info(f"Copied agent {name} to {target_file}")
-                        else:
-                            fallback_file = (settings.borg_root / "agents").absolute() / f"{name}.md"
-                            logging.getLogger("borg_universe").info(f"Trying fallback for agent {name}: {fallback_file}")
-                            if fallback_file.exists():
-                                 target_file = agents_dir / f"{name}.md"
-                                 shutil.copy2(fallback_file, target_file)
-                                 logging.getLogger("borg_universe").info(f"Copied agent {name} from BORG fallback to {target_file}")
-                            else:
-                                 found = False
-                                 for root_dir in [settings.agents_root, settings.borg_root / "agents"]:
-                                     if not root_dir.exists(): continue
-                                     matches = list(root_dir.glob(f"**/{name}.md"))
-                                     if matches:
-                                         shutil.copy2(matches[0], agents_dir / f"{name}.md")
-                                         logging.getLogger("borg_universe").info(f"Copied agent {name} from deep search: {matches[0]}")
-                                         found = True
-                                         break
-                                 if not found:
-                                     logging.getLogger("borg_universe").warning(f"Agent source file {source_file} not found (tried fallbacks too)")
-
-                    # Copy skills
-                    for name in skill_names:
-                        source_skill_dir = settings.skills_root.absolute() / name
-                        logging.getLogger("borg_universe").info(f"Trying to copy skill {name} from {source_skill_dir}")
-                        if not (source_skill_dir.exists() and source_skill_dir.is_dir()):
-                            source_skill_dir = (settings.borg_root / "skills").absolute() / name
-                            logging.getLogger("borg_universe").info(f"Trying fallback for skill {name}: {source_skill_dir}")
-
-                        if source_skill_dir.exists() and source_skill_dir.is_dir():
-                            target_skill_dir = skills_dir / name
-                            if target_skill_dir.exists():
-                                shutil.rmtree(target_skill_dir)
-                            shutil.copytree(source_skill_dir, target_skill_dir)
-                            logging.getLogger("borg_universe").info(f"Copied skill {name} to {target_skill_dir}")
-                        else:
-                            found = False
-                            for root_dir in [settings.skills_root, settings.borg_root / "skills"]:
-                                if not root_dir.exists(): continue
-                                matches = [d for d in root_dir.glob(f"**/{name}") if d.is_dir()]
-                                if matches:
-                                    target_skill_dir = skills_dir / name
-                                    if target_skill_dir.exists():
-                                        shutil.rmtree(target_skill_dir)
-                                    shutil.copytree(matches[0], target_skill_dir)
-                                    logging.getLogger("borg_universe").info(f"Copied skill {name} from deep search: {matches[0]}")
-                                    found = True
-                                    break
-                            if not found:
-                                logging.getLogger("borg_universe").warning(f"Skill source directory for {name} not found in any location")
+            _bind_project_units_if_available(client, project_id, units)
+            _copy_project_units_to_claude(
+                settings=settings,
+                project=project,
+                project_id=project_id,
+                agent_names=agent_names,
+                skill_names=skill_names,
+            )
         except Exception as exc:
             logging.getLogger("borg_universe").error(f"Unexpected error during bind and copy: {exc}")
             
@@ -636,6 +634,173 @@ def _map_workbench_path(host_path: str) -> Path | None:
         return absolute if absolute.exists() else None
 
     return None
+
+
+def _project_directory_prefix(workbench_root: Path) -> str:
+    root = str(workbench_root).rstrip("\\/")
+    if not root:
+        return ""
+    if "\\" in root or re.match(r"^[A-Za-z]:", root):
+        return root + "\\"
+    return root + "/"
+
+
+def _build_project_directory(workbench_root: Path, parent_directory: str, directory_name: str, fallback: str) -> str:
+    parent = parent_directory.strip().strip("\\/")
+    candidate = directory_name.strip().strip("\\/")
+    if not candidate:
+        return fallback.strip()
+
+    root = str(workbench_root).rstrip("\\/")
+    segments = [segment for segment in (parent, candidate) if segment]
+    if not root:
+        if "\\" in parent or re.match(r"^[A-Za-z]:", parent):
+            return ntpath.join(*segments) if segments else ""
+        return "/".join(segments)
+    if "\\" in root or re.match(r"^[A-Za-z]:", root):
+        return ntpath.join(root, *segments)
+    suffix = "/".join(segments)
+    return f"{root}/{suffix}" if suffix else root
+
+
+def _workbench_directory_options(workbench_root: Path) -> list[str]:
+    try:
+        root = workbench_root.expanduser()
+        if not root.exists() or not root.is_dir():
+            return [""]
+        options = [""]
+        for child in sorted(root.iterdir(), key=lambda entry: entry.name.lower()):
+            if child.is_dir():
+                options.append(child.name)
+        return options
+    except OSError:
+        return [""]
+
+
+def _bind_project_units_if_available(
+    client: SupabaseRestClient,
+    project_id: str,
+    units: list[dict[str, str]],
+) -> None:
+    repo = ProjectRegistryBindingRepository(client)
+    try:
+        repo.unbind_all(project_id)
+        if units:
+            repo.bind_units(project_id, units)
+    except SupabaseRestError as exc:
+        if _is_missing_project_registry_bindings_table(exc):
+            logging.getLogger("borg_universe").warning(
+                "project_registry_bindings table is missing. Continuing with filesystem copy only."
+            )
+            return
+        raise
+
+
+def _copy_project_units_to_claude(
+    *,
+    settings: Any,
+    project: dict[str, Any] | None,
+    project_id: str,
+    agent_names: list[str],
+    skill_names: list[str],
+) -> None:
+    logger = logging.getLogger("borg_universe")
+    if not project:
+        logger.warning("Project %s was not found for .claude sync.", project_id)
+        return
+
+    project_dir = str(project.get("project_directory") or "").strip()
+    if not project_dir:
+        logger.warning("Project %s has no project_directory set. Skipping copy to .claude.", project_id)
+        return
+
+    base_path = _resolve_project_runtime_root(project_dir)
+    if base_path is None:
+        raise RuntimeError(
+            "Project directory is not accessible from the running service. "
+            "Check WORKBENCH_HOST_ROOT / WORKBENCH_CONTAINER_ROOT and the Docker volume mount."
+        )
+
+    claude_dir = base_path / ".claude"
+    agents_dir = claude_dir / "agents"
+    skills_dir = claude_dir / "skills"
+    agents_dir.mkdir(parents=True, exist_ok=True)
+    skills_dir.mkdir(parents=True, exist_ok=True)
+
+    for name in agent_names:
+        source_file = _find_agent_source(settings, name)
+        if source_file is None:
+            logger.warning("Agent source file for %s not found.", name)
+            continue
+        shutil.copy2(source_file, agents_dir / f"{name}.md")
+
+    for name in skill_names:
+        source_skill_dir = _find_skill_source(settings, name)
+        if source_skill_dir is None:
+            logger.warning("Skill source directory for %s not found.", name)
+            continue
+        target_skill_dir = skills_dir / name
+        if target_skill_dir.exists():
+            shutil.rmtree(target_skill_dir)
+        shutil.copytree(source_skill_dir, target_skill_dir)
+
+
+def _find_agent_source(settings: Any, name: str) -> Path | None:
+    direct = settings.agents_root.absolute() / f"{name}.md"
+    if direct.exists():
+        return direct
+
+    fallback = (settings.borg_root / "agents").absolute() / f"{name}.md"
+    if fallback.exists():
+        return fallback
+
+    for root_dir in [settings.agents_root, settings.borg_root / "agents"]:
+        if not root_dir.exists():
+            continue
+        matches = list(root_dir.glob(f"**/{name}.md"))
+        if matches:
+            return matches[0]
+    return None
+
+
+def _find_skill_source(settings: Any, name: str) -> Path | None:
+    direct = settings.skills_root.absolute() / name
+    if direct.exists() and direct.is_dir():
+        return direct
+
+    fallback = (settings.borg_root / "skills").absolute() / name
+    if fallback.exists() and fallback.is_dir():
+        return fallback
+
+    for root_dir in [settings.skills_root, settings.borg_root / "skills"]:
+        if not root_dir.exists():
+            continue
+        matches = [path for path in root_dir.glob(f"**/{name}") if path.is_dir()]
+        if matches:
+            return matches[0]
+    return None
+
+
+def _start_task_processing(settings: Any, task_id: str) -> None:
+    logger = logging.getLogger("borg_universe")
+    try:
+        client = SupabaseRestClient(settings)
+        task_repository = TaskRepository(client)
+        task = task_repository.get_task(task_id)
+        if not task:
+            logger.warning("Immediate task start skipped because task %s no longer exists.", task_id)
+            return
+        if str(task.get("status") or "") != "queued":
+            logger.info("Immediate task start skipped because task %s is in status %s.", task_id, task.get("status"))
+            return
+        worker = AgentWorker(
+            task_repository=task_repository,
+            artifact_repository=ArtifactRepository(client),
+            settings=settings,
+        )
+        worker.process_task(task)
+    except Exception as exc:
+        logger.exception("Immediate task start failed for task %s: %s", task_id, exc)
 
 
 def _infer_workbench_container_path(normalized_host: str, container_root: str) -> Path | None:

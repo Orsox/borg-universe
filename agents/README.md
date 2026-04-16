@@ -10,6 +10,7 @@
 |---|---|
 | **borg-queen-architect** | Entwirft Architektur & Modulstruktur auf Basis einer `borg-cube.md` — bevor Implementierung beginnt |
 | **borg-disassembler** | Zerlegt ein Feature-Spec in ein strukturiertes, ausführbares Task-Backlog für nachgelagerte Agenten |
+| **borg-git-orchestrator** | Verwaltet Branches, Worktrees und Workspace-Lifecycle für Claude Code Workflows |
 
 ---
 

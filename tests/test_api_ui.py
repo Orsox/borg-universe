@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+import app.core.config as config_module
 from app.core.config import Settings, get_settings
 import app.main as main_module
 import app.api.tasks as tasks_module
@@ -29,12 +30,45 @@ def test_root_renders_borg_homepage_template() -> None:
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
     assert "Borg Universe Command Node" in response.text
-    assert "Local control node for tasks, knowledge, agents, skills, and auditable MCP access." in response.text
+    assert "Agentic control node for iterative reasoning, domain-grounded workflows, and modular orchestration with auditable MCP access." in response.text
+    assert "Core principles" in response.text
+    assert "Agentic reasoning" in response.text
+    assert "Domain knowledge integration" in response.text
+    assert "Scalable architecture" in response.text
     assert 'href="/workflows"' in response.text
     assert "YAML flow and node boxes" in response.text
     assert "New task" not in response.text
     assert "New project" in response.text
     assert "Task telemetry" in response.text
+    assert "Workbench configuration required" in response.text
+
+
+def test_root_hides_workbench_warning_for_valid_workbench(monkeypatch, tmp_path: Path) -> None:
+    workbench_root = tmp_path / "workbench"
+    workbench_root.mkdir()
+    monkeypatch.setattr(main_module, "get_settings", lambda: _test_settings(tmp_path, workbench_root=workbench_root))
+
+    client = TestClient(create_app())
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "Workbench configuration required" not in response.text
+    assert ">ready<" in response.text or "<strong>ready</strong>" in response.text
+
+
+def test_get_settings_loads_workbench_root_from_dotenv(monkeypatch, tmp_path: Path) -> None:
+    workbench_root = tmp_path / "real-workbench"
+    workbench_root.mkdir()
+    (tmp_path / ".env").write_text(f"WORKBENCH_ROOT={workbench_root}\n", encoding="utf-8")
+    monkeypatch.setattr(config_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.delenv("WORKBENCH_ROOT", raising=False)
+    config_module.get_settings.cache_clear()
+
+    settings = config_module.get_settings()
+
+    assert settings.workbench_root == workbench_root
+    assert settings.workbench_status.valid is True
+    config_module.get_settings.cache_clear()
 
 
 def test_root_shows_task_telemetry_counts(monkeypatch) -> None:
@@ -149,9 +183,54 @@ def test_tasks_page_orders_most_recent_tasks_first(monkeypatch) -> None:
     assert response.text.index("Newer Task") < response.text.index("Older Task")
 
 
-def test_command_node_creates_python_project(monkeypatch) -> None:
-    fake_client = FakeSupabaseClient({"projects": []})
+def test_command_node_creates_python_project(monkeypatch, tmp_path: Path) -> None:
+    workbench_root = tmp_path / "workbench"
+    (workbench_root / "clients").mkdir(parents=True)
+    agents_root = tmp_path / "agents"
+    skills_root = tmp_path / "skills"
+    borg_root = tmp_path / "BORG"
+    agents_root.mkdir()
+    skills_root.mkdir()
+    (borg_root / "agents").mkdir(parents=True)
+    (borg_root / "skills").mkdir(parents=True)
+    (agents_root / "borg-queen-architect.md").write_text("# agent\n", encoding="utf-8")
+    skill_dir = skills_root / "borg-collective"
+    (skill_dir / "references").mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# skill\n", encoding="utf-8")
+    (skill_dir / "references" / "example.md").write_text("reference\n", encoding="utf-8")
+    fake_client = FakeSupabaseClient(
+        {
+            "projects": [],
+            "tasks": [],
+            "task_events": [],
+            "agents": [{"name": "borg-queen-architect"}],
+            "skills": [{"name": "borg-collective"}],
+            "project_registry_bindings": [],
+        }
+    )
+    settings = Settings(
+        app_name="Borg Universe",
+        app_version="0.1.0",
+        environment="test",
+        debug=False,
+        log_level="INFO",
+        borg_root=borg_root,
+        agents_root=agents_root,
+        skills_root=skills_root,
+        workflows_root=tmp_path,
+        artifact_root=tmp_path,
+        workbench_root=workbench_root,
+        supabase_url=None,
+        supabase_anon_key=None,
+        supabase_service_role_key=None,
+        mcp_server_url=None,
+        worker_poll_interval_seconds=1.0,
+        worker_batch_size=1,
+    )
+    started_task_ids: list[str] = []
+    monkeypatch.setattr(main_module, "get_settings", lambda: settings)
     monkeypatch.setattr(main_module, "SupabaseRestClient", lambda _settings: fake_client)
+    monkeypatch.setattr(main_module, "_start_task_processing", lambda _settings, task_id: started_task_ids.append(task_id))
     client = TestClient(create_app())
 
     page = client.get("/projects/new")
@@ -159,7 +238,9 @@ def test_command_node_creates_python_project(monkeypatch) -> None:
     assert page.status_code == 200
     assert "Project setup" in page.text
     assert 'value="python"' in page.text
-    assert 'name="project_directory"' in page.text
+    assert 'name="project_directory_name"' in page.text
+    assert 'name="project_directory_parent"' in page.text
+    assert str(workbench_root) in page.text
     assert 'name="pycharm_mcp_enabled"' in page.text
     assert 'name="pycharm_mcp_sse_url"' in page.text
     assert 'name="pycharm_mcp_stream_url"' in page.text
@@ -171,7 +252,8 @@ def test_command_node_creates_python_project(monkeypatch) -> None:
             "id": "",
             "project_type": "python",
             "description": "Python runtime and tooling project.",
-            "project_directory": r"D:\Workbench\firststart",
+            "project_directory_parent": "clients",
+            "project_directory_name": "firststart",
             "pycharm_mcp_enabled": "on",
             "pycharm_mcp_sse_url": "http://127.0.0.1:64769/sse",
             "pycharm_mcp_stream_url": "http://127.0.0.1:64769/stream",
@@ -183,11 +265,46 @@ def test_command_node_creates_python_project(monkeypatch) -> None:
     assert fake_client.tables["projects"][0]["id"] == "automation-tools"
     assert fake_client.tables["projects"][0]["project_type"] == "python"
     assert fake_client.tables["projects"][0]["name"] == "Automation Tools"
-    assert fake_client.tables["projects"][0]["project_directory"] == r"D:\Workbench\firststart"
+    assert fake_client.tables["projects"][0]["project_directory"] == str(workbench_root / "clients" / "firststart")
     assert fake_client.tables["projects"][0]["pycharm_mcp_enabled"] is True
     assert fake_client.tables["projects"][0]["pycharm_mcp_sse_url"] == "http://127.0.0.1:64769/sse"
     assert fake_client.tables["projects"][0]["pycharm_mcp_stream_url"] == "http://127.0.0.1:64769/stream"
+    assert fake_client.tables["tasks"][0]["title"] == "Automation Tools - New Borg Cube Project"
+    assert fake_client.tables["tasks"][0]["description"] == "Python runtime and tooling project."
+    assert fake_client.tables["tasks"][0]["status"] == "queued"
+    assert fake_client.tables["tasks"][0]["workflow_id"] == "new_borg_cube_project"
+    assert fake_client.tables["tasks"][0]["project_id"] == "automation-tools"
+    assert fake_client.tables["tasks"][0]["local_path"] == str(workbench_root / "clients" / "firststart")
+    assert fake_client.tables["tasks"][0]["pycharm_mcp_enabled"] is True
+    assert fake_client.tables["tasks"][0]["requested_by"] == "Project Setup"
+    assert fake_client.tables["project_registry_bindings"] == [
+        {"project_id": "automation-tools", "unit_name": "borg-queen-architect", "unit_type": "agent", "id": "fake-2"},
+        {"project_id": "automation-tools", "unit_name": "borg-collective", "unit_type": "skill", "id": "fake-3"},
+    ]
+    assert (workbench_root / "clients" / "firststart" / ".claude" / "agents" / "borg-queen-architect.md").exists()
+    assert (workbench_root / "clients" / "firststart" / ".claude" / "skills" / "borg-collective" / "SKILL.md").exists()
+    assert (workbench_root / "clients" / "firststart" / ".claude" / "skills" / "borg-collective" / "references" / "example.md").exists()
+    assert any(
+        event["event_type"] == "workflow_selected" and event["payload"].get("workflow_id") == "new_borg_cube_project"
+        for event in fake_client.tables["task_events"]
+    )
+    assert started_task_ids == [fake_client.tables["tasks"][0]["id"]]
     assert response.headers["location"] == "/projects/new"
+
+
+def test_new_project_page_lists_workbench_subdirectories(monkeypatch, tmp_path: Path) -> None:
+    workbench_root = tmp_path / "workbench"
+    (workbench_root / "clients").mkdir(parents=True)
+    (workbench_root / "labs").mkdir()
+    monkeypatch.setattr(main_module, "get_settings", lambda: _test_settings(tmp_path, workbench_root=workbench_root))
+
+    client = TestClient(create_app())
+    page = client.get("/projects/new")
+
+    assert page.status_code == 200
+    assert '<option value=""></option>' in page.text or '<option value="">.</option>' in page.text
+    assert '<option value="clients">clients</option>' in page.text
+    assert '<option value="labs">labs</option>' in page.text
 
 
 def test_projects_overview_lists_projects_with_delete_actions(monkeypatch) -> None:
@@ -308,6 +425,7 @@ def test_bind_project_copies_selected_agents_and_skills_into_nested_claude_dirs(
         skills_root=skills_root,
         workflows_root=tmp_path,
         artifact_root=tmp_path,
+        workbench_root=tmp_path / "workbench",
         supabase_url=None,
         supabase_anon_key=None,
         supabase_service_role_key=None,
@@ -561,6 +679,7 @@ def test_orchestration_page_saves_agent_selection(tmp_path) -> None:
         skills_root=tmp_path,
         workflows_root=tmp_path,
         artifact_root=tmp_path,
+        workbench_root=tmp_path / "workbench",
         supabase_url=None,
         supabase_anon_key=None,
         supabase_service_role_key=None,
@@ -586,6 +705,8 @@ def test_orchestration_page_saves_agent_selection(tmp_path) -> None:
     assert "Claude Code" in page.text
     assert "Primary Agent" in page.text
     assert "Use Claude Code" in page.text
+    assert "Operating principles" in page.text
+    assert "Use staged execution and low parallelism" in page.text
     assert (tmp_path / "config" / "orchestration.json").exists()
 
 
@@ -605,6 +726,7 @@ def test_local_model_page_saves_connection_settings(tmp_path) -> None:
         skills_root=tmp_path,
         workflows_root=tmp_path,
         artifact_root=tmp_path,
+        workbench_root=tmp_path / "workbench",
         supabase_url=None,
         supabase_anon_key=None,
         supabase_service_role_key=None,
@@ -669,6 +791,7 @@ def test_local_model_page_rejects_invalid_ip(tmp_path) -> None:
         skills_root=tmp_path,
         workflows_root=tmp_path,
         artifact_root=tmp_path,
+        workbench_root=tmp_path / "workbench",
         supabase_url=None,
         supabase_anon_key=None,
         supabase_service_role_key=None,
@@ -702,6 +825,7 @@ def test_local_model_page_accepts_docker_host_name(tmp_path) -> None:
         skills_root=tmp_path,
         workflows_root=tmp_path,
         artifact_root=tmp_path,
+        workbench_root=tmp_path / "workbench",
         supabase_url=None,
         supabase_anon_key=None,
         supabase_service_role_key=None,
@@ -754,7 +878,7 @@ def test_workflow_detail_page_renders_execution_view_and_yaml_editor(tmp_path) -
 
     assert response.status_code == 200
     assert "Workflow overview" in response.text
-    assert "Execution view" in response.text
+    assert "Execution blueprint" in response.text
     assert "Show YAML source" in response.text
     assert "id: demo" in response.text
     assert "Workflow YAML" in response.text
@@ -771,7 +895,7 @@ def test_workflow_detail_page_saves_yaml_file(tmp_path) -> None:
 
     response = client.post(
         "/workflows/demo",
-        data={"filename": "demo.yaml", "yaml_content": _workflow_yaml("Edited Demo", "queued")},
+        data={"filename": "demo.yaml", "yaml_content": _workflow_yaml("Edited Demo", "defined")},
         follow_redirects=False,
     )
 
@@ -780,7 +904,7 @@ def test_workflow_detail_page_saves_yaml_file(tmp_path) -> None:
     assert response.status_code == 303
     assert workflow_file.read_text(encoding="utf-8").startswith("id: demo")
     assert "Edited Demo" in workflow_file.read_text(encoding="utf-8")
-    assert "status: queued" in workflow_file.read_text(encoding="utf-8")
+    assert "status: defined" in workflow_file.read_text(encoding="utf-8")
 
 
 def test_workflows_api_returns_yaml_workflow() -> None:
@@ -828,7 +952,7 @@ def test_workflow_settings_page_edits_yaml_file(tmp_path) -> None:
     assert "Workflow definitions" in page.text
     assert "Demo" in page.text
 
-    updated_yaml = _workflow_yaml("Edited Demo", "queued")
+    updated_yaml = _workflow_yaml("Edited Demo", "defined")
     response = client.post(
         "/workflows/settings",
         data={"filename": "demo.yaml", "yaml_content": updated_yaml},
@@ -839,7 +963,7 @@ def test_workflow_settings_page_edits_yaml_file(tmp_path) -> None:
 
     assert response.status_code == 303
     assert "Edited Demo" in workflow_file.read_text(encoding="utf-8")
-    assert "status: queued" in workflow_file.read_text(encoding="utf-8")
+    assert "status: defined" in workflow_file.read_text(encoding="utf-8")
 
 
 def test_workflow_settings_page_rejects_invalid_yaml_without_overwriting(tmp_path) -> None:
@@ -862,6 +986,30 @@ def test_workflow_settings_page_rejects_invalid_yaml_without_overwriting(tmp_pat
 
     assert response.status_code == 422
     assert "YAML not saved" in response.text
+    assert workflow_file.read_text(encoding="utf-8") == original_yaml
+
+
+def test_workflow_settings_page_rejects_runtime_status_for_workflow_definition(tmp_path) -> None:
+    workflows_root = tmp_path / "workflows"
+    workflows_root.mkdir()
+    workflow_file = workflows_root / "demo.yaml"
+    original_yaml = _workflow_yaml("Demo", "draft")
+    workflow_file.write_text(original_yaml, encoding="utf-8")
+    settings = _test_settings(tmp_path, workflows_root=workflows_root)
+    client = TestClient(create_app())
+    client.app.dependency_overrides[get_settings] = lambda: settings
+
+    response = client.post(
+        "/workflows/settings",
+        data={"filename": "demo.yaml", "yaml_content": _workflow_yaml("Demo", "queued")},
+        follow_redirects=False,
+    )
+
+    client.app.dependency_overrides.clear()
+
+    assert response.status_code == 422
+    assert "status" in response.text
+    assert "defined" in response.text
     assert workflow_file.read_text(encoding="utf-8") == original_yaml
 
 
@@ -912,6 +1060,7 @@ def test_tasks_page_uses_project_dropdown_from_database(monkeypatch) -> None:
         skills_root=Path("."),
         workflows_root=Path("."),
         artifact_root=Path("."),
+        workbench_root=Path("./workbench"),
         supabase_url="http://supabase.local",
         supabase_anon_key="anon",
         supabase_service_role_key=None,
@@ -1014,6 +1163,7 @@ def test_tasks_page_falls_back_when_projects_table_is_unavailable(monkeypatch) -
         skills_root=Path("."),
         workflows_root=Path("."),
         artifact_root=Path("."),
+        workbench_root=Path("./workbench"),
         supabase_url="http://supabase.local",
         supabase_anon_key="anon",
         supabase_service_role_key=None,
@@ -1363,10 +1513,97 @@ def test_task_review_page_shows_latest_llm_summary(monkeypatch) -> None:
     assert "LLM summary for review" in response.text
     assert "Verify directory structure and existing main.py" in response.text
     assert "llm_processing_completed" in response.text
+
+
+def test_task_review_page_shows_worker_context_without_llm_output(monkeypatch) -> None:
+    fake_client = FakeSupabaseClient(
+        {
+            "tasks": [{"id": "t1", "title": "Task", "status": "review_required", "description": "Needs review"}],
+            "task_events": [
+                {
+                    "id": "e1",
+                    "task_id": "t1",
+                    "event_type": "project_context_missing",
+                    "message": "Project directory contains no source/build markers.",
+                    "payload": {"sparse": True, "path": "/workbench/tetris"},
+                    "created_at": "2026-04-12T08:00:00+00:00",
+                }
+            ],
+            "artifacts": [],
+            "projects": [],
+        }
+    )
+    monkeypatch.setattr(tasks_module, "SupabaseRestClient", lambda _settings: fake_client)
+    client = TestClient(create_app())
+
+    response = client.get("/tasks/t1/review")
+
+    assert response.status_code == 200
+    assert "Current worker context" in response.text
+    assert "Project directory contains no source/build markers." in response.text
+    assert "project_context_missing" in response.text
     assert "LLM transcript" in response.text
     assert "What should I do?" in response.text
     assert "Please inspect the task." in response.text
     assert "LLM output for review" in response.text
+
+
+def test_task_detail_shows_needs_input_guidance_and_cta(monkeypatch) -> None:
+    fake_client = FakeSupabaseClient(
+        {
+            "tasks": [{"id": "t1", "title": "Task", "status": "needs_input", "description": "Needs details"}],
+            "task_events": [
+                {
+                    "id": "e1",
+                    "task_id": "t1",
+                    "event_type": "input_requested",
+                    "message": "Please provide the missing board revision.",
+                    "payload": {"reason": "missing_nano_implant"},
+                    "created_at": "2026-04-12T08:00:00+00:00",
+                }
+            ],
+            "artifacts": [],
+            "projects": [],
+        }
+    )
+    monkeypatch.setattr(tasks_module, "SupabaseRestClient", lambda _settings: fake_client)
+    client = TestClient(create_app())
+
+    response = client.get("/tasks/t1")
+
+    assert response.status_code == 200
+    assert "Human input required" in response.text
+    assert "Provide input now" in response.text
+    assert "/tasks/t1/review" in response.text
+
+
+def test_task_review_page_allows_needs_input_and_shows_guidance(monkeypatch) -> None:
+    fake_client = FakeSupabaseClient(
+        {
+            "tasks": [{"id": "t1", "title": "Task", "status": "needs_input", "description": "Needs details"}],
+            "task_events": [
+                {
+                    "id": "e1",
+                    "task_id": "t1",
+                    "event_type": "project_context_missing",
+                    "message": "Project directory contains no source/build markers.",
+                    "payload": {"reason": "sparse_project_context", "path": "/workbench/demo"},
+                    "created_at": "2026-04-12T08:00:00+00:00",
+                }
+            ],
+            "artifacts": [],
+            "projects": [],
+        }
+    )
+    monkeypatch.setattr(tasks_module, "SupabaseRestClient", lambda _settings: fake_client)
+    client = TestClient(create_app())
+
+    response = client.get("/tasks/t1/review")
+
+    assert response.status_code == 200
+    assert "Human input required" in response.text
+    assert "Project context is incomplete" in response.text
+    assert "Confirm and continue" in response.text
 
 
 def test_api_routes_keep_json_errors_for_configuration_errors(monkeypatch) -> None:
@@ -1384,7 +1621,11 @@ def test_api_routes_keep_json_errors_for_configuration_errors(monkeypatch) -> No
     assert "SUPABASE_URL is not configured" in response.json()["detail"]
 
 
-def _test_settings(tmp_path: Path, workflows_root: Path | None = None) -> Settings:
+def _test_settings(
+    tmp_path: Path,
+    workflows_root: Path | None = None,
+    workbench_root: Path | None = None,
+) -> Settings:
     return Settings(
         app_name="Borg Universe",
         app_version="0.1.0",
@@ -1396,6 +1637,7 @@ def _test_settings(tmp_path: Path, workflows_root: Path | None = None) -> Settin
         skills_root=tmp_path,
         workflows_root=workflows_root or tmp_path,
         artifact_root=tmp_path,
+        workbench_root=workbench_root or (tmp_path / "workbench_placeholder"),
         supabase_url=None,
         supabase_anon_key=None,
         supabase_service_role_key=None,
