@@ -117,7 +117,7 @@ class ClaudeCodeClient:
             skills_source=settings.skills_root,
         )
         self.runner = runner or subprocess.run
-        self.timeout_seconds = timeout_seconds or float(os.getenv("LLM_TIMEOUT_SECONDS", os.getenv("CLAUDE_TIMEOUT_SECONDS", "1800")))
+        self.timeout_seconds = timeout_seconds or float(os.getenv("CLAUDE_TIMEOUT_SECONDS", os.getenv("LLM_TIMEOUT_SECONDS", "120")))
         self.mcp_config_json = mcp_config_json
 
     def ensure_project_assets(self) -> dict[str, Any]:

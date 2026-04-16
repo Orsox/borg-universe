@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import time
+from difflib import SequenceMatcher
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -84,9 +85,14 @@ class AgentWorker:
         task_id = task["id"]
         agent_name = task.get("assigned_agent") or "mock-agent"
         skill_name = task.get("assigned_skill")
+        initial_events: list[dict[str, Any]] = []
         try:
             initial_events = self.task_repository.list_events(task_id)
             resume_context = self._latest_workflow_resume(initial_events)
+            if resume_context:
+                print(f"[WORKER] picked up post-review continuation for task {task_id}")
+            else:
+                print(f"[WORKER] picked up task {task_id}")
             self.task_repository.update_status(task_id, "running")
             self.task_repository.add_event(
                 task_id,
@@ -113,6 +119,7 @@ class AgentWorker:
                     return sparse_project
             if resume_context:
                 review_context = self._latest_review_context(initial_events)
+                print(f"[WORKFLOW] Continuing after review with input: {review_context.get('notes') if review_context else 'None'}")
                 self.task_repository.add_event(
                     task_id,
                     "workflow_resume_detected",
@@ -137,6 +144,12 @@ class AgentWorker:
                 )
             else:
                 llm_plan = self._run_local_llm_processing(task)
+            workflow_result: dict[str, Any] = {
+                "paused_for_review": False,
+                "completed_all_stages": False,
+                "uses_explicit_review": False,
+                "executed_stage_count": 0,
+            }
             if task.get("workflow_id"):
                 self.task_repository.add_event(
                     task_id,
@@ -144,12 +157,37 @@ class AgentWorker:
                     "Worker started the selected workflow after local LLM processing.",
                     {"workflow_id": task.get("workflow_id"), "agent_name": agent_name, "llm_plan": llm_plan},
                 )
-                self._run_workflow(
+                workflow_result = self._run_workflow(
                     task,
                     agent_name,
                     llm_plan,
                     stage_index=resume_context.get("resume_stage_index", 0) if resume_context else 0,
                 )
+            if resume_context:
+                resumed_stage_index = resume_context.get("resume_stage_index", 0)
+                self.task_repository.add_event(
+                    task_id,
+                    "post_review_stage_execution",
+                    "Worker evaluated post-review workflow execution.",
+                    {
+                        "resume_stage_index": resumed_stage_index,
+                        "executed_stage_count": workflow_result.get("executed_stage_count", 0),
+                        "completed_all_stages": workflow_result.get("completed_all_stages", False),
+                    },
+                )
+                if int(workflow_result.get("executed_stage_count", 0)) <= 0:
+                    message = "Premature completion blocked: no post-review execution ran after review."
+                    self.task_repository.add_event(
+                        task_id,
+                        "workflow_premature_completion_blocked",
+                        message,
+                        {
+                            "resume_stage_index": resumed_stage_index,
+                            "workflow_id": task.get("workflow_id"),
+                        },
+                    )
+                    self.task_repository.update_status(task_id, "failed")
+                    raise RuntimeError(message)
             self.task_repository.add_event(
                 task_id,
                 "project_lookup_started",
@@ -210,6 +248,26 @@ class AgentWorker:
                     "pycharm_mcp_enabled": bool(task.get("pycharm_mcp_enabled")),
                 },
             )
+            if workflow_result.get("paused_for_review"):
+                self.task_repository.add_event(
+                    task_id,
+                    "review_required",
+                    "Worker paused at an explicit human review checkpoint.",
+                    {
+                        "artifact_id": artifact["id"],
+                        "review_stage_index": workflow_result.get("review_stage_index"),
+                        "review_stage_id": workflow_result.get("review_stage_id"),
+                        "next_stage_index": workflow_result.get("next_stage_index"),
+                    },
+                )
+                self.task_repository.update_status(task_id, "review_required")
+                return {"task_id": task_id, "status": "review_required", "result_count": result_count}
+
+            if workflow_result.get("uses_explicit_review") and workflow_result.get("completed_all_stages"):
+                print("[WORKFLOW] marking task as done")
+                self.task_repository.update_status(task_id, "done")
+                return {"task_id": task_id, "status": "done", "result_count": result_count}
+
             self.task_repository.add_event(
                 task_id,
                 "review_required",
@@ -220,6 +278,65 @@ class AgentWorker:
             return {"task_id": task_id, "status": "review_required", "result_count": result_count}
         except Exception as exc:
             logger.exception("Worker failed while processing task %s", task_id)
+            if _is_file_access_blocker_error(exc):
+                self.task_repository.add_event(
+                    task_id,
+                    "worker_file_access_blocked",
+                    str(exc),
+                    {"agent_name": agent_name, "skill_name": skill_name, "guard": "file_access_blocker"},
+                )
+                self.task_repository.update_status(task_id, "needs_input")
+                return {"task_id": task_id, "status": "needs_input", "error": str(exc), "reason": "file_access_blocker"}
+            if _is_temporary_infrastructure_error(exc):
+                retry_events = [
+                    event
+                    for event in (initial_events or self.task_repository.list_events(task_id))
+                    if event.get("event_type") == "worker_temporary_failure_requeued"
+                ]
+                attempt = len(retry_events) + 1
+                max_retries = max(0, int(getattr(self.settings, "worker_temporary_failure_max_retries", 3)))
+                if attempt > max_retries:
+                    self.task_repository.add_event(
+                        task_id,
+                        "worker_temporary_failure_exhausted",
+                        str(exc),
+                        {
+                            "agent_name": agent_name,
+                            "skill_name": skill_name,
+                            "attempt": attempt,
+                            "max_retries": max_retries,
+                            "guard": "temporary_failure_retry_budget",
+                        },
+                    )
+                    self.task_repository.update_status(task_id, "failed")
+                    return {
+                        "task_id": task_id,
+                        "status": "failed",
+                        "error": str(exc),
+                        "retry": False,
+                        "attempt": attempt,
+                        "max_retries": max_retries,
+                    }
+                self.task_repository.add_event(
+                    task_id,
+                    "worker_temporary_failure_requeued",
+                    str(exc),
+                    {
+                        "agent_name": agent_name,
+                        "skill_name": skill_name,
+                        "attempt": attempt,
+                        "max_retries": max_retries,
+                    },
+                )
+                self.task_repository.update_status(task_id, "queued")
+                return {
+                    "task_id": task_id,
+                    "status": "queued",
+                    "error": str(exc),
+                    "retry": True,
+                    "attempt": attempt,
+                    "max_retries": max_retries,
+                }
             self.task_repository.add_event(
                 task_id,
                 "worker_failed",
@@ -263,6 +380,13 @@ class AgentWorker:
         plan: dict[str, Any] = {"summary": "", "first_node_id": None, "iterations": []}
         for index, prompt in enumerate(prompts, start=1):
             composed_prompt = f"{prompt}\n\nPrevious output:\n{previous_output}" if previous_output else prompt
+            composed_prompt = self._prepare_prompt_with_deep_guard(
+                task_id,
+                composed_prompt,
+                provider="local",
+                phase="planning",
+                iteration=index,
+            )
             self.task_repository.add_event(
                 task_id,
                 "llm_request",
@@ -286,6 +410,7 @@ class AgentWorker:
                 raise RuntimeError(f"Local LLM processing failed: {exc}") from exc
 
             output = str(result.get("content", "")).strip()
+            _raise_if_tool_approval_loop(output)
             previous_output = output
             parsed = _parse_json_object(output)
             if parsed.get("first_node_id"):
@@ -363,6 +488,14 @@ class AgentWorker:
 
         client = self.local_llm_client or LocalLlmClient(orchestration.local_model)
         prompt = self._llm_review_resume_prompt(task, review_context, stage_index)
+        prompt = self._prepare_prompt_with_deep_guard(
+            task_id,
+            prompt,
+            provider="local",
+            phase="review_resume",
+            iteration=1,
+        )
+        print(f"[LLM] executing continuation with review input for task {task_id}")
         self.task_repository.add_event(
             task_id,
             "llm_request",
@@ -387,6 +520,7 @@ class AgentWorker:
             raise RuntimeError(f"Local LLM resume processing failed: {exc}") from exc
 
         output = str(result.get("content", "")).strip()
+        _raise_if_tool_approval_loop(output)
         parsed = _parse_json_object(output)
         summary = str(parsed.get("summary") or output[:500]).strip()
         plan = {
@@ -512,6 +646,13 @@ class AgentWorker:
             raise RuntimeError(f"Claude Code asset sync failed: {exc}") from exc
 
         prompt = self._implementation_prompt(task)
+        prompt = self._prepare_prompt_with_deep_guard(
+            task_id,
+            prompt,
+            provider="claude_code",
+            phase="implementation",
+            iteration=1,
+        )
         self.task_repository.add_event(
             task_id,
             "implementation_task_started",
@@ -554,6 +695,7 @@ class AgentWorker:
             raise RuntimeError(f"Claude Code implementation failed: {exc}") from exc
 
         output = str(result.get("content", "")).strip()
+        _raise_if_tool_approval_loop(output)
         parsed = _parse_json_object(output)
         summary = str(parsed.get("summary") or output[:500]).strip()
         self.task_repository.add_event(
@@ -629,6 +771,13 @@ class AgentWorker:
             assets,
         )
         prompt = self._claude_code_prompt(task, review_context, phase=phase, resume_context=resume_context)
+        prompt = self._prepare_prompt_with_deep_guard(
+            task_id,
+            prompt,
+            provider="claude_code",
+            phase=phase,
+            iteration=1,
+        )
         event_type = "llm_resume_processing_started" if phase == "review_resume" else "llm_processing_started"
         self.task_repository.add_event(
             task_id,
@@ -676,8 +825,10 @@ class AgentWorker:
             raise RuntimeError(f"Claude Code processing failed: {exc}") from exc
 
         output = str(result.get("content", "")).strip()
+        _raise_if_tool_approval_loop(output)
         parsed = _parse_json_object(output)
         summary = str(parsed.get("summary") or output[:500]).strip()
+        workspace_metadata = self._extract_workspace_metadata(parsed)
         extracted_specs = []
         stored_specs = []
         materialized_specs: list[str] = []
@@ -689,6 +840,7 @@ class AgentWorker:
             materialized_project_files = self._maybe_materialize_project_files(task, assets, parsed)
             self._validate_new_borg_cube_project_completion(task, assets, extracted_specs, materialized_specs)
         created_tasks = self._store_implementation_tasks(task, parsed) if phase == "planning" else []
+        stored_workspace_metadata = self._store_workspace_metadata(task, workspace_metadata)
         plan = {
             "summary": summary,
             "first_node_id": str(parsed["first_node_id"]) if parsed.get("first_node_id") else None,
@@ -699,6 +851,7 @@ class AgentWorker:
             "stored_spec_count": len(stored_specs),
             "created_task_count": len(created_tasks),
             "materialized_project_file_count": len(materialized_project_files),
+            "workspace_metadata": stored_workspace_metadata,
         }
         if resume_context:
             plan["resume_stage_index"] = int(resume_context.get("resume_stage_index", 1))
@@ -716,6 +869,7 @@ class AgentWorker:
                 "parsed": parsed,
                 "command": result.get("command"),
                 "stderr": result.get("stderr"),
+                "workspace_metadata": stored_workspace_metadata,
             },
         )
         if stored_specs:
@@ -752,6 +906,13 @@ class AgentWorker:
                     "prompt_prefix": "<nano-implant>",
                 },
             )
+        if stored_workspace_metadata:
+            self.task_repository.add_event(
+                task_id,
+                "workspace_metadata_updated",
+                "Workspace metadata was stored for the active task.",
+                stored_workspace_metadata,
+            )
         self.task_repository.add_event(
             task_id,
             "llm_iteration_completed",
@@ -763,6 +924,7 @@ class AgentWorker:
                 "prompt": prompt,
                 "output": output,
                 "parsed": parsed,
+                "workspace_metadata": stored_workspace_metadata,
             },
         )
         completed_type = "llm_resume_processing_completed" if phase == "review_resume" else "llm_processing_completed"
@@ -776,9 +938,65 @@ class AgentWorker:
                 "resume_stage_index": plan.get("resume_stage_index"),
                 "human_review_text": self._render_llm_human_review_text(plan),
                 "provider": "claude_code",
+                "workspace_metadata": stored_workspace_metadata,
             },
         )
         return plan
+
+    def _prepare_prompt_with_deep_guard(
+        self,
+        task_id: str,
+        prompt: str,
+        *,
+        provider: str,
+        phase: str,
+        iteration: int,
+    ) -> str:
+        if "<deep>" in prompt:
+            return prompt
+        similar_streak = self._recent_similar_llm_response_streak(task_id)
+        if similar_streak < 3:
+            return prompt
+        escalated = f"<deep>\n{prompt}"
+        self.task_repository.add_event(
+            task_id,
+            "llm_deep_escalation_requested",
+            "Detected repeated similar LLM results; escalating next prompt to deep model mode.",
+            {
+                "provider": provider,
+                "phase": phase,
+                "iteration": iteration,
+                "similar_response_streak": similar_streak,
+                "guard": "similar_response_limit",
+                "limit": 3,
+            },
+        )
+        return escalated
+
+    def _recent_similar_llm_response_streak(self, task_id: str) -> int:
+        events = self.task_repository.list_events(task_id)
+        responses: list[str] = []
+        for event in events:
+            if event.get("event_type") != "llm_response":
+                continue
+            payload = event.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            response = _clean_text(payload.get("response"))
+            if response:
+                responses.append(response)
+        if not responses:
+            return 0
+
+        # Count a trailing streak of equal/similar responses to detect non-productive loops.
+        anchor = responses[-1]
+        streak = 1
+        for candidate in reversed(responses[:-1]):
+            if _responses_similar(anchor, candidate):
+                streak += 1
+                continue
+            break
+        return streak
 
     def _claude_code_prompt(
         self,
@@ -813,6 +1031,7 @@ class AgentWorker:
             f"PyCharm MCP enabled: {bool(task.get('pycharm_mcp_enabled'))}",
             f"Workflow: {task.get('workflow_id')}",
         ]
+        lines.extend(self._workspace_metadata_prompt_lines(task))
         lines.extend(_sandbox_safe_workspace_lines(container_path or host_path or task.get("local_path")))
         if bool(task.get("pycharm_mcp_enabled")):
             lines.append("Use the PyCharm MCP file tools for project file reads and writes when they are available.")
@@ -881,6 +1100,11 @@ class AgentWorker:
         return rows[0] if rows else None
 
     def _task_project_paths(self, task: dict[str, Any]) -> tuple[str | None, Path | None]:
+        workspace_metadata = self._task_workspace_metadata(task)
+        active_workspace = _clean_text(workspace_metadata.get("worktree_path")) if workspace_metadata else None
+        if active_workspace:
+            container_path = _map_workbench_path(active_workspace)
+            return active_workspace, container_path
         host_path = _clean_text(task.get("local_path"))
         if not host_path:
             return None, None
@@ -921,6 +1145,79 @@ class AgentWorker:
         if isinstance(ignored, list) and ignored:
             lines.append(f"- Ignored metadata directories: {', '.join(str(item) for item in ignored)}")
         return lines
+
+    def _task_workspace_metadata(self, task: dict[str, Any]) -> dict[str, Any]:
+        raw = task.get("workspace_metadata")
+        return raw if isinstance(raw, dict) else {}
+
+    def _workspace_metadata_prompt_lines(self, task: dict[str, Any]) -> list[str]:
+        workspace = self._task_workspace_metadata(task)
+        if not workspace:
+            return []
+        lines = ["Workspace metadata:"]
+        for key in (
+            "workspace_id",
+            "workflow_id",
+            "task_id",
+            "node_id",
+            "branch_name",
+            "worktree_path",
+            "base_commit",
+            "head_commit",
+            "lifecycle_state",
+        ):
+            value = workspace.get(key)
+            if value is None or value == "":
+                continue
+            lines.append(f"- {key}: {value}")
+        return lines
+
+    def _extract_workspace_metadata(self, payload: dict[str, Any]) -> dict[str, Any]:
+        source = next(
+            (
+                candidate
+                for candidate in (
+                    payload.get("workspace_metadata"),
+                    payload.get("workspace"),
+                    payload.get("active_workspace"),
+                )
+                if isinstance(candidate, dict)
+            ),
+            None,
+        )
+        if not isinstance(source, dict):
+            return {}
+        normalized: dict[str, Any] = {}
+        for key in (
+            "workspace_id",
+            "workflow_id",
+            "task_id",
+            "node_id",
+            "branch_name",
+            "worktree_path",
+            "base_commit",
+            "head_commit",
+            "lifecycle_state",
+        ):
+            value = _clean_text(source.get(key))
+            if value:
+                normalized[key] = value
+        retry_index = source.get("retry_index")
+        if isinstance(retry_index, int):
+            normalized["retry_index"] = retry_index
+        elif isinstance(retry_index, str) and retry_index.strip().isdigit():
+            normalized["retry_index"] = int(retry_index.strip())
+        return normalized
+
+    def _store_workspace_metadata(self, task: dict[str, Any], workspace_metadata: dict[str, Any]) -> dict[str, Any]:
+        if not workspace_metadata:
+            return self._task_workspace_metadata(task)
+        merged = {**self._task_workspace_metadata(task), **workspace_metadata}
+        updated = self.task_repository.update_fields(task["id"], {"workspace_metadata": merged})
+        task["workspace_metadata"] = (
+            updated.get("workspace_metadata") if isinstance(updated, dict) else merged
+        ) or merged
+        return dict(task.get("workspace_metadata") or merged)
 
     def _project_context_snapshot(self, task: dict[str, Any]) -> dict[str, Any]:
         root = self._task_project_root(task)
@@ -1187,6 +1484,7 @@ class AgentWorker:
             prompt = _clean_text(raw_task.get("prompt") or raw_task.get("description") or raw_task.get("goal")) or title
             if not prompt.startswith("<nano-implant>"):
                 prompt = f"<nano-implant> {prompt}"
+            workspace_metadata = self._extract_workspace_metadata(raw_task)
             description_parts = [
                 prompt,
                 "",
@@ -1212,6 +1510,8 @@ class AgentWorker:
                             requested_by=parent_task.get("requested_by"),
                             assigned_agent="borg-implementation-drone",
                             assigned_skill="implementation",
+                            sequence_index=index,
+                            workspace_metadata=workspace_metadata,
                         ),
                         initial_status="draft",
                     )
@@ -1242,6 +1542,7 @@ class AgentWorker:
             f"Target project path in container: {container_path or host_path or task.get('local_path')}",
             f"PyCharm MCP enabled: {bool(task.get('pycharm_mcp_enabled'))}",
         ]
+        lines.extend(self._workspace_metadata_prompt_lines(task))
         lines.extend(_sandbox_safe_workspace_lines(container_path or host_path or task.get("local_path")))
         spec_context = self._implementation_spec_context(task)
         if spec_context:
@@ -1339,7 +1640,7 @@ class AgentWorker:
                 continue
             if event_type == "review_noted" and payload.get("notes"):
                 latest["notes"] = str(payload.get("notes") or "")
-            elif event_type == "review_confirmed" and payload.get("notes"):
+            elif event_type in ("review_confirmed", "human_review_confirmed") and payload.get("notes"):
                 latest["notes"] = str(payload.get("notes") or latest.get("notes") or "")
             elif event_type == "llm_processing_completed":
                 if payload.get("summary"):
@@ -1354,10 +1655,10 @@ class AgentWorker:
         default_agent_name: str,
         llm_plan: dict[str, Any],
         stage_index: int = 0,
-    ) -> None:
+    ) -> dict[str, Any]:
         workflow_id = task.get("workflow_id")
         if not workflow_id:
-            return
+            return {"paused_for_review": False, "completed_all_stages": False, "uses_explicit_review": False, "executed_stage_count": 0}
 
         try:
             workflow = self.workflow_store.get_workflow(str(workflow_id))
@@ -1368,7 +1669,7 @@ class AgentWorker:
                 "Selected workflow could not be loaded.",
                 {"workflow_id": workflow_id, "error": str(exc)},
             )
-            return
+            return {"paused_for_review": False, "completed_all_stages": False, "uses_explicit_review": False, "executed_stage_count": 0}
         if not workflow:
             self.task_repository.add_event(
                 task["id"],
@@ -1376,24 +1677,83 @@ class AgentWorker:
                 "Selected workflow was not found.",
                 {"workflow_id": workflow_id},
             )
-            return
+            return {"paused_for_review": False, "completed_all_stages": False, "uses_explicit_review": False, "executed_stage_count": 0}
 
         stages = self.workflow_store.build_stages(workflow)
         if not stages:
-            return
+            return {"paused_for_review": False, "completed_all_stages": False, "uses_explicit_review": False, "executed_stage_count": 0}
 
         bounded_stage_index = min(max(stage_index, 0), len(stages) - 1)
-        stage = stages[bounded_stage_index]
-        stage_id = workflow.steps[bounded_stage_index].id if bounded_stage_index < len(workflow.steps) else stage.title
+        uses_explicit_review = self._workflow_uses_explicit_review_stages(workflow, stages)
+        current_stage_index = bounded_stage_index
+        executed_stage_count = 0
+        while current_stage_index < len(stages):
+            stage = stages[current_stage_index]
+            stage_id = workflow.steps[current_stage_index].id if current_stage_index < len(workflow.steps) else stage.title
+            if uses_explicit_review and self._stage_requires_human_review(workflow, current_stage_index, stage):
+                next_stage_index = current_stage_index + 1 if current_stage_index + 1 < len(stages) else None
+                self.task_repository.add_event(
+                    task["id"],
+                    "workflow_review_required",
+                    "Workflow reached a human review checkpoint and paused before executing it.",
+                    {
+                        "workflow_id": workflow.id,
+                        "review_stage_id": stage_id,
+                        "review_stage_index": current_stage_index,
+                        "review_stage_title": stage.title,
+                        "next_stage_index": next_stage_index,
+                    },
+                )
+                return {
+                    "paused_for_review": True,
+                    "completed_all_stages": False,
+                    "uses_explicit_review": True,
+                    "executed_stage_count": executed_stage_count,
+                    "review_stage_index": current_stage_index,
+                    "review_stage_id": stage_id,
+                    "next_stage_index": next_stage_index,
+                }
+
+            if bounded_stage_index > 0:
+                print(f"[WORKFLOW] advancing to post-review stage: {stage.title}")
+                print("[WORKER] executing post-review stage")
+                if "plan" in stage.title.lower():
+                    print("[PLANNER] recomputed cube plan")
+                if "synthesis" in stage.title.lower():
+                    print("[SYNTHESIS] generating cube files")
+            self._run_workflow_stage(task, workflow, default_agent_name, llm_plan, current_stage_index, stage)
+            executed_stage_count += 1
+            current_stage_index += 1
+            if not uses_explicit_review:
+                break
+
+        return {
+            "paused_for_review": False,
+            "completed_all_stages": current_stage_index >= len(stages),
+            "uses_explicit_review": uses_explicit_review,
+            "executed_stage_count": executed_stage_count,
+            "next_stage_index": current_stage_index if current_stage_index < len(stages) else None,
+        }
+
+    def _run_workflow_stage(
+        self,
+        task: dict[str, Any],
+        workflow: WorkflowDefinition,
+        default_agent_name: str,
+        llm_plan: dict[str, Any],
+        stage_index: int,
+        stage: Any,
+    ) -> None:
+        stage_id = workflow.steps[stage_index].id if stage_index < len(workflow.steps) else stage.title
         nodes = self._ordered_stage_nodes(workflow, stage.nodes, llm_plan.get("first_node_id"))
         self.task_repository.add_event(
             task["id"],
             "workflow_stage_started",
-            f"Workflow level {bounded_stage_index + 1} started: {stage.title}.",
+            f"Workflow level {stage_index + 1} started: {stage.title}.",
             {
                 "workflow_id": workflow.id,
                 "stage_id": stage_id,
-                "stage_index": bounded_stage_index,
+                "stage_index": stage_index,
                 "stage_title": stage.title,
                 "stage_mode": stage.mode,
             },
@@ -1408,7 +1768,7 @@ class AgentWorker:
                     "node_id": nodes[0].id,
                     "llm_plan": llm_plan,
                     "stage_id": stage_id,
-                    "stage_index": bounded_stage_index,
+                    "stage_index": stage_index,
                 },
             )
 
@@ -1416,6 +1776,22 @@ class AgentWorker:
         for index, node in enumerate(nodes, start=1):
             agent_name = node.agent or default_agent_name
             selected_skills = self._select_skills(node, task)
+            workspace_action = self._workspace_audit_action(node)
+            if workspace_action:
+                self.task_repository.add_event(
+                    task["id"],
+                    f"workspace_{workspace_action}_started",
+                    f"Workspace {workspace_action} phase started.",
+                    self._workspace_audit_payload(
+                        task=task,
+                        workflow=workflow,
+                        stage_id=stage_id,
+                        stage_index=stage_index,
+                        node=node,
+                        agent_name=agent_name,
+                        sequence=index,
+                    ),
+                )
             self.task_repository.add_event(
                 task["id"],
                 "workflow_agent_invoked",
@@ -1426,7 +1802,7 @@ class AgentWorker:
                     "agent_name": agent_name,
                     "sequence": index,
                     "stage_id": stage_id,
-                    "stage_index": bounded_stage_index,
+                    "stage_index": stage_index,
                 },
             )
             self.task_repository.add_event(
@@ -1439,7 +1815,7 @@ class AgentWorker:
                     "agent_name": agent_name,
                     "skills": selected_skills,
                     "stage_id": stage_id,
-                    "stage_index": bounded_stage_index,
+                    "stage_index": stage_index,
                 },
             )
             command_results.extend(
@@ -1447,32 +1823,104 @@ class AgentWorker:
                     parent_task=task,
                     workflow=workflow,
                     stage_id=stage_id,
-                    stage_index=bounded_stage_index,
+                    stage_index=stage_index,
                     node=node,
                 )
             )
+            if workspace_action:
+                self.task_repository.add_event(
+                    task["id"],
+                    f"workspace_{workspace_action}_completed",
+                    f"Workspace {workspace_action} phase completed.",
+                    self._workspace_audit_payload(
+                        task=task,
+                        workflow=workflow,
+                        stage_id=stage_id,
+                        stage_index=stage_index,
+                        node=node,
+                        agent_name=agent_name,
+                        sequence=index,
+                        command_results=command_results,
+                    ),
+                )
         triggered_tasks = []
         if self._is_implementation_trigger_stage(stage_id, nodes):
             triggered_tasks = self._trigger_implementation_tasks(
                 task,
                 workflow_id=workflow.id,
                 stage_id=stage_id,
-                stage_index=bounded_stage_index,
+                stage_index=stage_index,
             )
         self.task_repository.add_event(
             task["id"],
             "workflow_stage_completed",
-            f"Workflow level {bounded_stage_index + 1} completed: {stage.title}.",
+            f"Workflow level {stage_index + 1} completed: {stage.title}.",
             {
                 "workflow_id": workflow.id,
                 "stage_id": stage_id,
-                "stage_index": bounded_stage_index,
+                "stage_index": stage_index,
                 "stage_title": stage.title,
-                "next_stage_index": bounded_stage_index + 1 if bounded_stage_index + 1 < len(stages) else None,
+                "next_stage_index": stage_index + 1 if stage_index + 1 < len(self.workflow_store.build_stages(workflow)) else None,
                 "triggered_implementation_task_ids": [queued.get("id") for queued in triggered_tasks],
                 "command_results": command_results,
             },
         )
+
+    def _workflow_uses_explicit_review_stages(self, workflow: WorkflowDefinition, stages: list[Any]) -> bool:
+        return any(self._stage_requires_human_review(workflow, index, stage) for index, stage in enumerate(stages))
+
+    def _workspace_audit_action(self, node: WorkflowNode) -> str | None:
+        candidates = [node.id, node.borg_name, node.role]
+        for workflow_task in node.tasks:
+            candidates.extend([workflow_task.id, workflow_task.title, workflow_task.prompt])
+        normalized = " ".join(str(candidate or "").lower() for candidate in candidates)
+        if "workspace_orchestrator" not in normalized and "git-" not in normalized and "worktree" not in normalized:
+            return None
+        if "prepare" in normalized:
+            return "prepare"
+        if "finalize" in normalized:
+            return "finalize"
+        if " lock" in f" {normalized}" or "locked" in normalized:
+            return "lock"
+        if any(token in normalized for token in ("cleanup", "clean up", "remove", "prune", "discard", "archive")):
+            return "cleanup"
+        return None
+
+    def _workspace_audit_payload(
+        self,
+        *,
+        task: dict[str, Any],
+        workflow: WorkflowDefinition,
+        stage_id: str,
+        stage_index: int,
+        node: WorkflowNode,
+        agent_name: str,
+        sequence: int,
+        command_results: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        payload = {
+            "workflow_id": workflow.id,
+            "stage_id": stage_id,
+            "stage_index": stage_index,
+            "node_id": node.id,
+            "node_role": node.role,
+            "agent_name": agent_name,
+            "sequence": sequence,
+            "workspace_metadata": self._task_workspace_metadata(task),
+        }
+        if command_results is not None:
+            payload["command_results"] = command_results
+        return payload
+
+    def _stage_requires_human_review(self, workflow: WorkflowDefinition, stage_index: int, stage: Any) -> bool:
+        stage_id = workflow.steps[stage_index].id if stage_index < len(workflow.steps) else stage.title
+        candidates = [stage_id, stage.title]
+        for node in stage.nodes:
+            candidates.extend([node.id, node.borg_name, node.role])
+            for workflow_task in node.tasks:
+                candidates.extend([workflow_task.id, workflow_task.title, workflow_task.prompt])
+        normalized = " ".join(str(candidate or "").lower() for candidate in candidates)
+        return "human-review" in normalized or "human review" in normalized
 
     def _run_node_command_gates(
         self,
@@ -1767,7 +2215,7 @@ class AgentWorker:
             payload = event.get("payload") or {}
             if not isinstance(payload, dict):
                 payload = {}
-            if event_type == "workflow_resumed":
+            if event_type in ("workflow_resumed", "human_review_confirmed"):
                 raw_index = payload.get("resume_stage_index", 1)
                 try:
                     resume_stage_index = int(raw_index)
@@ -1950,6 +2398,8 @@ def _render_command_log(result: dict[str, Any]) -> str:
 
 
 def _looks_like_scaffold_request(task: dict[str, Any]) -> bool:
+    if str(task.get("workflow_id") or "").strip() == "new_borg_cube_project":
+        return True
     text = f"{task.get('title') or ''}\n{task.get('description') or ''}".lower()
     indicators = {
         "create",
@@ -1989,6 +2439,69 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _is_temporary_infrastructure_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    indicators = (
+        "temporary failure in name resolution",
+        "name or service not known",
+        "nodename nor servname provided",
+        "failed to resolve",
+        "connection refused",
+        "timed out",
+    )
+    return any(indicator in text for indicator in indicators)
+
+
+def _responses_similar(left: str, right: str) -> bool:
+    normalized_left = _normalize_similarity_text(left)
+    normalized_right = _normalize_similarity_text(right)
+    if not normalized_left or not normalized_right:
+        return False
+    if normalized_left == normalized_right:
+        return True
+    return SequenceMatcher(None, normalized_left, normalized_right).ratio() >= 0.9
+
+
+def _normalize_similarity_text(value: str) -> str:
+    text = value.lower()
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"[^a-z0-9 ]", "", text)
+    return text.strip()
+
+
+def _is_file_access_blocker_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    indicators = (
+        "permission denied",
+        "operation not permitted",
+        "tool approval loop detected",
+        "requires approval",
+        "[tool_error]",
+        "claude code timed out",
+        "working directory does not exist",
+        "no such file or directory",
+        "file not found",
+        "cannot access",
+        "read-only file system",
+        "access is denied",
+        "sandbox",
+        "blocked by tool approval",
+    )
+    return any(indicator in text for indicator in indicators)
+
+
+def _raise_if_tool_approval_loop(output: str) -> None:
+    text = output.lower()
+    requires_approval_hits = text.count("requires approval")
+    tool_error_hits = text.count("[tool_error]")
+    if requires_approval_hits >= 2 or (requires_approval_hits >= 1 and tool_error_hits >= 2):
+        raise RuntimeError("Tool approval loop detected: repeated '[tool_error] This command requires approval'.")
+    if '"finish_reason": "tool_calls"' in text or '"finish_reason":"tool_calls"' in text:
+        raise RuntimeError("Tool call loop detected: model returned finish_reason='tool_calls'.")
+    if '"tool_calls"' in text and '"arguments": ""' in text and '"name": "bash"' in text:
+        raise RuntimeError("Tool call loop detected: Bash tool call emitted with empty arguments.")
+
+
 def _normalize_spec_path(value: Any) -> str | None:
     text = _clean_text(value)
     if not text:
@@ -2024,7 +2537,6 @@ def _borg_cube_quality_errors(content: str) -> list[str]:
     required_sections = {
         "metadata": "metadata",
         "goal": "goal",
-        "problem statement": "problem statement",
         "scope": "scope",
         "dependencies": "dependencies",
         "functional requirements": "functional requirements",
@@ -2033,6 +2545,11 @@ def _borg_cube_quality_errors(content: str) -> list[str]:
         "interfaces": "interfaces",
         "assumptions / open points": "assumptions",
     }
+    # "problem statement" is optional for some project types, or can be part of goal
+    optional_sections = {
+        "problem statement": "problem statement",
+    }
+    
     errors = [
         f"missing section: {label}"
         for label, needle in required_sections.items()

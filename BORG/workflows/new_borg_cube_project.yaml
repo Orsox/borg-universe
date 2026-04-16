@@ -1,9 +1,25 @@
 id: new_borg_cube_project
 title: New Borg Cube Project
 description: Create project and module borg-cube specifications, review and augment them, disassemble the approved scope into small database tasks, then execute implementation task by task.
-status: queued
+status: defined
 entry_node: queen-architect
 nodes:
+- id: git-prepare-architecture
+  borg_name: Git Prepare Architecture Workspace
+  role: workspace_orchestrator
+  agent: borg-git-orchestrator
+  subagents: []
+  tasks:
+  - id: prepare-project-architecture-worktree
+    title: Prepare isolated project architecture worktree
+    prompt: >-
+      Prepare an isolated architecture worktree before scaffold files and
+      borg-cube specs are materialized. Record workflow_id, branch_name,
+      worktree_path, base_branch, base_commit, retry_index, and
+      lifecycle_state=prepared. Use branch pattern
+      queen/<workflow-id>/architecture-v<retry> and worktree pattern
+      .worktrees/<workflow-id>/queen-architecture-v<retry>.
+    status: draft
 - id: queen-architect
   borg_name: Queen
   role: architect
@@ -14,9 +30,25 @@ nodes:
     title: Create base project and module borg-cube specs
     prompt: >-
       Create or update a minimal runnable base project in the target directory, then create a project-level borg-cube.md that summarizes the project and lists module specs. The root borg-cube.md must be a clean implementation-facing specification with these sections: Metadata, Goal, Problem Statement, Scope, Dependencies, Submodules / Internal Structure, Functional Requirements with FR-* IDs, Non-Functional Requirements with NFR-* IDs, Constraints, Interfaces, Error Handling, and Assumptions / Open Points. Create one module borg-cube.md spec per module with a short capability briefing. Return borg_cube_specs for database storage and set materialize_borg_cube_files true so the root borg-cube.md and module borg-cube.md files are written to the target project. When the target directory is empty or missing core files, return project_files with safe relative paths and text content for the smallest appropriate scaffold, such as README.md, pyproject.toml or requirements.txt, source package/module files, and tests.
+      Use the prepared architecture workspace metadata from the git prepare node
+      and operate only inside that worktree.
     status: queued
     depends_on: []
   prompt: ''
+- id: git-finalize-architecture
+  borg_name: Git Finalize Architecture Workspace
+  role: workspace_orchestrator
+  agent: borg-git-orchestrator
+  subagents: []
+  tasks:
+  - id: finalize-project-architecture-worktree
+    title: Finalize project architecture worktree
+    prompt: >-
+      Finalize the active architecture worktree after scaffold and borg-cube
+      outputs are prepared. Capture head_commit, git status, generated file
+      summary, and set the workspace lifecycle to reviewable when outputs
+      exist. Preserve prior retry attempts for review comparison.
+    status: draft
 - id: requirement-node
   borg_name: Borg Requirement Node
   role: reviewer
@@ -25,7 +57,7 @@ nodes:
   tasks:
   - id: spec-review
     title: Review and augment borg-cube specs
-    prompt: Review all project and module borg_cube_specs and any generated project_files for quality, consistency, missing information, and implementation readiness. Ensure the project-level borg-cube.md can be materialized cleanly at the project root, includes all canonical sections, contains traceable FR-* and NFR-* requirements, and module borg-cube.md files use safe relative module paths. Return corrected borg_cube_specs whenever review changes are needed. Add missing information to the spec set when the user provides review notes.
+    prompt: Review all project and module borg_cube_specs and any generated project_files for quality, consistency, missing information, and implementation readiness. Ensure the project-level borg-cube.md can be materialized cleanly at the project root, includes all canonical sections, contains traceable FR-* and NFR-* requirements, and module borg-cube.md files use safe relative module paths. Review the finalized architecture workspace in read-only mode by default. Return corrected borg_cube_specs whenever review changes are needed. Add missing information to the spec set when the user provides review notes.
     status: draft
     depends_on:
     - queen-architect
@@ -37,7 +69,7 @@ nodes:
   tasks:
   - id: disassemble-to-small-tasks
     title: Disassemble approved specs into small tasks
-    prompt: Convert the reviewed borg_cube_specs and generated base project files into small implementation_tasks. Each task must be focused, independently checkable, dependency-aware, and include a prompt that starts with <nano-implant>. Do not create tasks for scaffold files already returned in project_files unless follow-up work is required.
+    prompt: Convert the reviewed borg_cube_specs and generated base project files into small implementation_tasks. Each task must be focused, independently checkable, dependency-aware, and include a prompt that starts with <nano-implant>. Do not create tasks for scaffold files already returned in project_files unless follow-up work is required. Every implementation task must declare that execution requires a prepared task worktree.
     status: draft
     depends_on:
     - requirement-node
@@ -49,10 +81,25 @@ nodes:
   tasks:
   - id: persist-implementation-tasks
     title: Store implementation tasks in the database
-    prompt: Return implementation_tasks in JSON so Borg Universe can persist them as queued tasks assigned to borg-implementation-drone.
+    prompt: Return implementation_tasks in JSON so Borg Universe can persist them as queued tasks assigned to borg-implementation-drone together with any workspace preparation requirements for the git orchestrator.
     status: draft
     depends_on:
     - disassembler
+- id: git-prepare-implementation-task
+  borg_name: Git Prepare Implementation Task Workspace
+  role: workspace_orchestrator
+  agent: borg-git-orchestrator
+  subagents: []
+  tasks:
+  - id: prepare-project-implementation-worktree
+    title: Prepare isolated implementation task worktree
+    prompt: >-
+      Prepare an isolated implementation worktree for exactly one approved task.
+      Record task_id, workflow_id, approved_spec_revision, source_branch,
+      branch_name, worktree_path, base_commit, and lifecycle_state=prepared.
+      Use branch pattern impl/<task-id> and worktree pattern
+      .worktrees/impl/<task-id>.
+    status: draft
 - id: implementation-drone
   borg_name: Borg Implementation Drone
   role: implementer
@@ -61,9 +108,22 @@ nodes:
   tasks:
   - id: execute-small-task
     title: Execute queued implementation tasks
-    prompt: Execute exactly one queued implementation task at a time. The implementation prompt must start with <nano-implant>. Do not merge tasks or implement unlisted scope.
+    prompt: Execute exactly one queued implementation task at a time. The implementation prompt must start with <nano-implant>. Require prepared task workspace metadata. Do not merge tasks or implement unlisted scope.
     status: draft
     depends_on: []
+- id: git-finalize-implementation-task
+  borg_name: Git Finalize Implementation Task Workspace
+  role: workspace_orchestrator
+  agent: borg-git-orchestrator
+  subagents: []
+  tasks:
+  - id: finalize-project-implementation-worktree
+    title: Finalize project implementation task worktree
+    prompt: >-
+      Finalize the active implementation task worktree after exactly one task
+      run. Capture changed files, head_commit, git status, validation outcome,
+      and whether the workspace should be reviewable, archived, or retained.
+    status: draft
 - id: implementation-trigger
   borg_name: Implementation Trigger
   role: implementation_trigger
@@ -81,7 +141,9 @@ steps:
   title: Project and module borg-cube specification
   mode: sequential
   nodes:
+  - git-prepare-architecture
   - queen-architect
+  - git-finalize-architecture
 - id: review-phase
   title: Requirement review and augmentation
   mode: sequential
@@ -90,7 +152,7 @@ steps:
   retry:
     condition: nodes['requirement-node'].output.retry_required == true
     max_attempts: 3
-    target_node: queen-architect
+    target_node: git-prepare-architecture
     message: 'Requirement issues found. Correct the project and module borg_cube_specs based on this review: {{nodes[''requirement-node''].output.errors}}'
 - id: disassembly-phase
   title: Disassemble specs into small implementation tasks
@@ -111,4 +173,6 @@ steps:
   title: Implement queued tasks one by one
   mode: sequential
   nodes:
+  - git-prepare-implementation-task
   - implementation-drone
+  - git-finalize-implementation-task

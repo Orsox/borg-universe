@@ -1,7 +1,7 @@
 id: python_tooling_harness
 title: Python Tooling Harness
 description: Pure Python workflow for helper tools, CLIs, libraries, automation, tests, packaging, and host-side scripts. Embedded toolchains and web UI work are out of scope unless explicitly requested.
-status: queued
+status: defined
 entry_node: python-intake
 nodes:
   - id: python-intake
@@ -13,6 +13,20 @@ nodes:
         title: Normalize pure Python scope
         prompt: Identify Python package, CLI, script, test, or automation scope. Do not pull in PlatformIO, firmware build systems, or web UI work unless the user explicitly asks for them.
         status: queued
+  - id: git-prepare-architecture
+    borg_name: Git Prepare Python Architecture Workspace
+    role: workspace_orchestrator
+    agent: borg-git-orchestrator
+    tasks:
+      - id: prepare-python-architecture-worktree
+        title: Prepare isolated Python planning worktree
+        prompt: >-
+          Prepare an isolated workspace for Python requirements capture whenever
+          repo-backed notes, specs, or task artifacts may be materialized.
+          Record workflow_id, branch_name, worktree_path, base_branch,
+          base_commit, retry_index, and lifecycle_state=prepared using the
+          architecture branch and worktree naming pattern.
+        status: draft
   - id: python-requirements
     borg_name: Python Requirement Review
     role: reviewer
@@ -20,7 +34,19 @@ nodes:
     tasks:
       - id: python-contracts
         title: Capture Python contracts
-        prompt: Extract CLI arguments, module APIs, input/output formats, error handling, packaging constraints, and test expectations.
+        prompt: Extract CLI arguments, module APIs, input/output formats, error handling, packaging constraints, and test expectations. Use the prepared architecture workspace when repo artifacts are written and keep review behavior read-only by default.
+        status: draft
+  - id: git-finalize-architecture
+    borg_name: Git Finalize Python Architecture Workspace
+    role: workspace_orchestrator
+    agent: borg-git-orchestrator
+    tasks:
+      - id: finalize-python-architecture-worktree
+        title: Finalize Python planning worktree
+        prompt: >-
+          Finalize the active Python planning workspace after requirements
+          capture. Capture head_commit, git status, and any generated artifact
+          summary, then mark the workspace reviewable if outputs exist.
         status: draft
   - id: python-disassembly
     borg_name: Python Task Disassembly
@@ -29,7 +55,7 @@ nodes:
     tasks:
       - id: split-python-implants
         title: Split Python work into small implementation tasks
-        prompt: Produce small dependency-aware implementation_tasks. Each prompt must start with <nano-implant>, cover exactly one Python change, and include focused verification.
+        prompt: Produce small dependency-aware implementation_tasks. Each prompt must start with <nano-implant>, cover exactly one Python change, include focused verification, and require a prepared task worktree before execution.
         status: draft
   - id: implementation-trigger
     borg_name: Implementation Trigger
@@ -39,6 +65,44 @@ nodes:
       - id: trigger-implementation
         title: Queue approved Python implementation tasks
         prompt: Queue stored implementation_tasks for borg-implementation-drone. Do not implement in this parent task.
+        status: draft
+  - id: git-prepare-implementation-task
+    borg_name: Git Prepare Python Implementation Workspace
+    role: workspace_orchestrator
+    agent: borg-git-orchestrator
+    tasks:
+      - id: prepare-python-implementation-worktree
+        title: Prepare isolated Python task worktree
+        prompt: >-
+          Prepare an isolated implementation worktree for exactly one approved
+          Python task. Record task_id, workflow_id, source_branch, branch_name,
+          worktree_path, base_commit, and lifecycle_state=prepared using the
+          impl/<task-id> branch and .worktrees/impl/<task-id> path pattern.
+        status: draft
+  - id: implementation-drone
+    borg_name: Python Implementation Drone
+    role: implementer
+    agent: borg-implementation-drone
+    tasks:
+      - id: implement-python-task
+        title: Implement one queued Python task
+        prompt: >-
+          Execute exactly one queued Python implementation task at a time.
+          Require prepared task workspace metadata, keep the prompt scoped to a
+          single <nano-implant> task, and do not merge tasks or broaden scope.
+        status: draft
+  - id: git-finalize-implementation-task
+    borg_name: Git Finalize Python Implementation Workspace
+    role: workspace_orchestrator
+    agent: borg-git-orchestrator
+    tasks:
+      - id: finalize-python-implementation-worktree
+        title: Finalize Python task worktree
+        prompt: >-
+          Finalize the active Python task worktree after exactly one
+          implementation run. Capture changed files, head_commit, git status,
+          validation outcome, and whether the workspace remains reviewable or
+          should be archived.
         status: draft
   - id: python-validation
     borg_name: Python Validation Gates
@@ -79,7 +143,9 @@ steps:
     title: Python contracts
     mode: sequential
     nodes:
+      - git-prepare-architecture
       - python-requirements
+      - git-finalize-architecture
   - id: disassembly-phase
     title: Python task disassembly
     mode: sequential
@@ -90,6 +156,13 @@ steps:
     mode: sequential
     nodes:
       - implementation-trigger
+  - id: implementation-phase
+    title: Implement Python tasks one by one
+    mode: sequential
+    nodes:
+      - git-prepare-implementation-task
+      - implementation-drone
+      - git-finalize-implementation-task
   - id: validation-phase
     title: Deterministic Python validation
     mode: sequential

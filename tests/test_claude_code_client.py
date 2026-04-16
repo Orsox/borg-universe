@@ -6,6 +6,7 @@ from pathlib import Path
 
 from app.core.config import Settings
 from app.services.local_llm_client import LocalLlmClient
+from app.services.local_llm_client import _unsupported_tool_call_error
 from app.services.claude_code_client import ClaudeCodeClient, ClaudeCodeWorkspace
 from app.services.orchestration_settings_store import LocalModelSettings, OrchestrationSettings
 
@@ -194,7 +195,7 @@ def test_claude_code_client_supports_configurable_permission_mode(tmp_path: Path
     assert calls[0]["args"][0:5] == ["claude", "--bare", "--no-session-persistence", "--permission-mode", "acceptEdits"]
 
 
-def test_claude_code_client_defaults_to_ten_minute_timeout(tmp_path: Path, monkeypatch) -> None:
+def test_claude_code_client_defaults_to_two_minute_timeout(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / "project"
     agents_root = project_root / "agents"
     skills_root = project_root / "skills"
@@ -224,7 +225,7 @@ def test_claude_code_client_defaults_to_ten_minute_timeout(tmp_path: Path, monke
 
     client.send_prompt("Plan the task.")
 
-    assert calls[0]["kwargs"]["timeout"] == 1800.0
+    assert calls[0]["kwargs"]["timeout"] == 120.0
 
 
 def test_local_llm_client_defaults_to_ten_minute_timeout(monkeypatch) -> None:
@@ -232,6 +233,67 @@ def test_local_llm_client_defaults_to_ten_minute_timeout(monkeypatch) -> None:
     client = LocalLlmClient(LocalModelSettings())
 
     assert client.timeout_seconds == 1800.0
+
+
+def test_local_llm_tool_call_guard_rejects_empty_arguments() -> None:
+    payload = {
+        "choices": [
+            {
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "function": {"name": "Bash", "arguments": ""}
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+    error = _unsupported_tool_call_error(payload)
+    assert error is not None
+    assert "empty arguments" in error
+
+
+def test_local_llm_tool_call_guard_allows_normal_content() -> None:
+    payload = {
+        "choices": [
+            {
+                "message": {"content": "ok"}
+            }
+        ]
+    }
+    assert _unsupported_tool_call_error(payload) is None
+
+
+def test_local_llm_tool_call_guard_rejects_finish_reason_tool_calls() -> None:
+    payload = {
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "delta": {},
+            }
+        ]
+    }
+    error = _unsupported_tool_call_error(payload)
+    assert error is not None
+    assert "finish_reason='tool_calls'" in error
+
+
+def test_local_llm_selects_deep_model_when_prompt_contains_deep(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_DEEP_MODEL_NAME", "gpt-5.4-mini")
+    client = LocalLlmClient(LocalModelSettings(model_name="qwen3-coder-next-ream"))
+
+    selected = client._select_model_name("<deep>\nplease continue")  # type: ignore[attr-defined]
+
+    assert selected == "gpt-5.4-mini"
+
+
+def test_local_llm_keeps_default_model_without_deep_marker() -> None:
+    client = LocalLlmClient(LocalModelSettings(model_name="qwen3-coder-next-ream"))
+
+    selected = client._select_model_name("please continue")  # type: ignore[attr-defined]
+
+    assert selected == "qwen3-coder-next-ream"
 
 
 def _settings(tmp_path: Path, agents_root: Path, skills_root: Path) -> Settings:
@@ -246,6 +308,7 @@ def _settings(tmp_path: Path, agents_root: Path, skills_root: Path) -> Settings:
         skills_root=skills_root,
         workflows_root=tmp_path / "workflows",
         artifact_root=tmp_path / "artifacts",
+        workbench_root=tmp_path / "workbench",
         supabase_url=None,
         supabase_anon_key=None,
         supabase_service_role_key=None,

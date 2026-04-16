@@ -1,7 +1,7 @@
 id: stm32_nordic_harness
 title: STM32 Nordic Harness
 description: Embedded workflow for STM32 CubeMX/CubeIDE/CMake/Makefile projects and Nordic nRF52/nRF54 Zephyr/NCS projects. PlatformIO is optional fallback, not the default path.
-status: queued
+status: defined
 entry_node: embedded-intake
 nodes:
   - id: embedded-intake
@@ -13,6 +13,20 @@ nodes:
         title: Detect STM32 or Nordic target
         prompt: Identify STM32 CubeMX/CubeIDE/CMake/Makefile projects and Nordic nRF52/nRF54 Zephyr/NCS projects from .ioc, CMakeLists.txt, Makefile, west.yml, prj.conf, board overlays, and toolchain files.
         status: queued
+  - id: git-prepare-architecture
+    borg_name: Git Prepare Embedded Architecture Workspace
+    role: workspace_orchestrator
+    agent: borg-git-orchestrator
+    tasks:
+      - id: prepare-embedded-architecture-worktree
+        title: Prepare isolated embedded planning worktree
+        prompt: >-
+          Prepare an isolated workspace for embedded constraints capture when
+          repo-backed notes, specs, or task artifacts may be materialized.
+          Record workflow_id, branch_name, worktree_path, base_branch,
+          base_commit, retry_index, and lifecycle_state=prepared using the
+          architecture branch and worktree naming pattern.
+        status: draft
   - id: embedded-constraints
     borg_name: Embedded Constraint Review
     role: reviewer
@@ -20,7 +34,19 @@ nodes:
     tasks:
       - id: hardware-contracts
         title: Capture hardware contracts
-        prompt: Extract MCU, board, clocking, pin assignments, peripherals, interrupts, DMA, RTOS, timing, memory, power, bootloader, and safety constraints. Ask before assuming hardware behavior.
+        prompt: Extract MCU, board, clocking, pin assignments, peripherals, interrupts, DMA, RTOS, timing, memory, power, bootloader, and safety constraints. Ask before assuming hardware behavior. Use the prepared architecture workspace when repo artifacts are written and keep review behavior read-only by default.
+        status: draft
+  - id: git-finalize-architecture
+    borg_name: Git Finalize Embedded Architecture Workspace
+    role: workspace_orchestrator
+    agent: borg-git-orchestrator
+    tasks:
+      - id: finalize-embedded-architecture-worktree
+        title: Finalize embedded planning worktree
+        prompt: >-
+          Finalize the active embedded planning workspace after constraints
+          capture. Capture head_commit, git status, and any generated artifact
+          summary, then mark the workspace reviewable if outputs exist.
         status: draft
   - id: embedded-disassembly
     borg_name: Embedded Task Disassembly
@@ -29,7 +55,7 @@ nodes:
     tasks:
       - id: split-embedded-implants
         title: Split embedded work into small implementation tasks
-        prompt: Produce small dependency-aware implementation_tasks. Each prompt must start with <nano-implant>, cover exactly one embedded change, and include build or unit-test verification.
+        prompt: Produce small dependency-aware implementation_tasks. Each prompt must start with <nano-implant>, cover exactly one embedded change, include build or unit-test verification, and require a prepared task worktree before execution.
         status: draft
   - id: implementation-trigger
     borg_name: Implementation Trigger
@@ -39,6 +65,45 @@ nodes:
       - id: trigger-implementation
         title: Queue approved embedded implementation tasks
         prompt: Queue stored implementation_tasks for borg-implementation-drone. Do not implement in this parent task.
+        status: draft
+  - id: git-prepare-implementation-task
+    borg_name: Git Prepare Embedded Implementation Workspace
+    role: workspace_orchestrator
+    agent: borg-git-orchestrator
+    tasks:
+      - id: prepare-embedded-implementation-worktree
+        title: Prepare isolated embedded task worktree
+        prompt: >-
+          Prepare an isolated implementation worktree for exactly one approved
+          embedded task. Record task_id, workflow_id, source_branch,
+          branch_name, worktree_path, base_commit, and
+          lifecycle_state=prepared using the impl/<task-id> branch and
+          .worktrees/impl/<task-id> path pattern.
+        status: draft
+  - id: implementation-drone
+    borg_name: Embedded Implementation Drone
+    role: implementer
+    agent: borg-implementation-drone
+    tasks:
+      - id: implement-embedded-task
+        title: Implement one queued embedded task
+        prompt: >-
+          Execute exactly one queued embedded implementation task at a time.
+          Require prepared task workspace metadata, keep the prompt scoped to a
+          single <nano-implant> task, and do not merge tasks or broaden scope.
+        status: draft
+  - id: git-finalize-implementation-task
+    borg_name: Git Finalize Embedded Implementation Workspace
+    role: workspace_orchestrator
+    agent: borg-git-orchestrator
+    tasks:
+      - id: finalize-embedded-implementation-worktree
+        title: Finalize embedded task worktree
+        prompt: >-
+          Finalize the active embedded task worktree after exactly one
+          implementation run. Capture changed files, head_commit, git status,
+          validation outcome, and whether the workspace remains reviewable or
+          should be archived.
         status: draft
   - id: stm32-validation
     borg_name: STM32 Validation Gates
@@ -118,7 +183,9 @@ steps:
     title: Hardware and toolchain constraints
     mode: sequential
     nodes:
+      - git-prepare-architecture
       - embedded-constraints
+      - git-finalize-architecture
   - id: disassembly-phase
     title: Embedded task disassembly
     mode: sequential
@@ -129,6 +196,13 @@ steps:
     mode: sequential
     nodes:
       - implementation-trigger
+  - id: implementation-phase
+    title: Implement embedded tasks one by one
+    mode: sequential
+    nodes:
+      - git-prepare-implementation-task
+      - implementation-drone
+      - git-finalize-implementation-task
   - id: validation-phase
     title: STM32 and Nordic deterministic validation
     mode: sequential

@@ -39,6 +39,8 @@ class TaskCreate(BaseModel):
     requested_by: str | None = None
     assigned_agent: str | None = None
     assigned_skill: str | None = None
+    sequence_index: int = 0
+    workspace_metadata: dict[str, str | int | bool | None] = Field(default_factory=dict)
 
 
 class TaskStatusUpdate(BaseModel):

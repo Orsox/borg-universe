@@ -6,7 +6,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 WorkflowMode = Literal["sequential", "parallel"]
-WorkflowStatus = Literal["draft", "queued", "running", "needs_input", "review_required", "done", "failed"]
+WorkflowDefinitionStatus = Literal["draft", "defined"]
+WorkflowTaskStatus = Literal["draft", "queued", "running", "needs_input", "review_required", "done", "failed"]
 
 
 class WorkflowCommand(BaseModel):
@@ -27,7 +28,7 @@ class WorkflowTask(BaseModel):
     id: str = Field(min_length=1)
     title: str = Field(min_length=1)
     prompt: str = ""
-    status: WorkflowStatus = "draft"
+    status: WorkflowTaskStatus = "draft"
     depends_on: list[str] = Field(default_factory=list)
     command: str | WorkflowCommand | None = None
     commands: list[str | WorkflowCommand] = Field(default_factory=list)
@@ -64,7 +65,7 @@ class WorkflowDefinition(BaseModel):
     id: str = Field(min_length=1)
     title: str = Field(min_length=1)
     description: str = ""
-    status: WorkflowStatus = "draft"
+    status: WorkflowDefinitionStatus = "draft"
     entry_node: str
     nodes: list[WorkflowNode] = Field(default_factory=list)
     steps: list[WorkflowStep] = Field(default_factory=list)

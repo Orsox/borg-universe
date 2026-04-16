@@ -36,6 +36,16 @@ class FakeSupabaseClient:
             return rows
 
         if method == "POST":
+            if isinstance(body, list):
+                rows = []
+                for entry in deepcopy(body):
+                    if isinstance(entry, dict):
+                        entry.setdefault("id", f"fake-{self.next_id}")
+                        self.next_id += 1
+                        rows.append(entry)
+                self.tables.setdefault(table, []).extend(rows)
+                return [deepcopy(row) for row in rows] if prefer != "return=minimal" else None
+
             row = deepcopy(body or {})
             row.setdefault("id", f"fake-{self.next_id}")
             if table == "tasks":

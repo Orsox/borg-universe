@@ -47,8 +47,8 @@
 
 <section class="section panel">
   <div class="panel-header">
-    <h2>Execution view</h2>
-    <span class="badge done">current</span>
+    <h2>Execution blueprint</h2>
+    <span class="badge done">static</span>
   </div>
   <div class="panel-body">
     <ol class="workflow-stages workflow-box-flow">
@@ -57,9 +57,9 @@
       <li class="workflow-stage {{ 'parallel' if stage.mode == 'parallel' else 'sequential' }} {{ 'current' if workflow_progress.active == stage_index else '' }} {{ 'next' if workflow_progress.next == stage_index else '' }}">
         <div class="workflow-stage-label">
           <span class="workflow-level">Level {{ loop.index }}</span>
-          <span class="badge {{ 'queued' if stage.mode == 'parallel' else 'done' }}">{{ stage.mode }}</span>
-          {% if workflow_progress.active == stage_index %}<span class="badge queued">current</span>{% endif %}
-          {% if workflow_progress.next == stage_index %}<span class="badge">next step</span>{% endif %}
+          <span class="badge">{{ stage.mode }}</span>
+          {% if workflow_progress.active == stage_index %}<span class="badge done">focus</span>{% endif %}
+          {% if workflow_progress.next == stage_index %}<span class="badge">follows</span>{% endif %}
           <h3>{{ stage.title }}</h3>
         </div>
         <div class="workflow-nodes">
@@ -109,7 +109,7 @@
 <section class="section panel" id="workflow-yaml">
   <div class="panel-header">
     <h2>YAML source</h2>
-    <span class="badge queued">editable</span>
+    <span class="badge">editable</span>
   </div>
   <div class="panel-body">
     <details>

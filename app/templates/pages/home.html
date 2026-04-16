@@ -3,7 +3,7 @@
 {% block title %}Borg Universe{% endblock %}
 {% block eyebrow %}Collective interface{% endblock %}
 {% block heading %}Borg Universe Command Node{% endblock %}
-{% block summary %}Local control node for tasks, knowledge, agents, skills, and auditable MCP access.{% endblock %}
+{% block summary %}Agentic control node for iterative reasoning, domain-grounded workflows, and modular orchestration with auditable MCP access.{% endblock %}
 {% block page_actions %}
 <a class="button secondary" href="/projects">Manage projects</a>
 <a class="button secondary" href="/projects/new">New project</a>
@@ -17,6 +17,15 @@
   <strong>Collective status:</strong>
   The local node is running in non-production mode. Supabase context, MCP logging, and agent coordination remain traceable.
 </div>
+{% if not workbench_valid %}
+<div class="callout warning">
+  <strong>Workbench configuration required:</strong>
+  {{ workbench_message }}
+  <div style="margin-top: 8px;">
+    <span class="muted">Current path:</span> <code>{{ workbench_path }}</code>
+  </div>
+</div>
+{% endif %}
 {% endblock %}
 
 {% block content %}
@@ -37,10 +46,54 @@
     <span>Skills path</span>
     <strong>{{ skills_root_name }}</strong>
   </div>
+  <div class="metric">
+    <span>Workbench</span>
+    <strong>{{ "ready" if workbench_valid else "check .env" }}</strong>
+  </div>
+  <a class="metric" href="/agents">
+    <span>Agents</span>
+    <strong>{{ agent_count }}</strong>
+  </a>
+  <a class="metric" href="/skills">
+    <span>Skills</span>
+    <strong>{{ skill_count }}</strong>
+  </a>
 </section>
 
 <section class="layout">
   <div>
+    <section class="section panel">
+      <div class="panel-header">
+        <h2>Core principles</h2>
+        <span class="badge done">architected</span>
+      </div>
+      <div class="panel-body">
+        <ol class="timeline">
+          <li class="timeline-item">
+            <time class="timeline-time">01</time>
+            <div>
+              <h3>Agentic reasoning</h3>
+              <p>Tasks move through planning, review, resume, and validation loops so the node can improve work instead of reacting once.</p>
+            </div>
+          </li>
+          <li class="timeline-item">
+            <time class="timeline-time">02</time>
+            <div>
+              <h3>Domain knowledge integration</h3>
+              <p>Project context, MCP lookups, workflows, and skills keep execution anchored in the target stack instead of generic prompts.</p>
+            </div>
+          </li>
+          <li class="timeline-item">
+            <time class="timeline-time">03</time>
+            <div>
+              <h3>Scalable architecture</h3>
+              <p>Modular workflows, explicit orchestration, and auditable artifacts keep the system maintainable, cost-aware, and reviewable.</p>
+            </div>
+          </li>
+        </ol>
+      </div>
+    </section>
+
     <section class="section panel">
       <div class="panel-header">
         <h2>Task telemetry</h2>
@@ -160,10 +213,6 @@
             <span>Knowledge</span>
             <strong>Index</strong>
           </a>
-          <a class="metric" href="/agents">
-            <span>Agents</span>
-            <strong>Registry</strong>
-          </a>
           <a class="metric" href="/audit">
             <span>MCP</span>
             <strong>Audit</strong>
@@ -219,21 +268,21 @@
             <time class="timeline-time">01</time>
             <div>
               <h3>Submit task</h3>
-              <p>Tasks are captured with target platform, context, and project-selected execution defaults.</p>
+              <p>Tasks are captured with target platform, constraints, and project-selected execution defaults for planning.</p>
             </div>
           </li>
           <li class="timeline-item">
             <time class="timeline-time">02</time>
             <div>
               <h3>Fetch project context</h3>
-              <p>Each agent run begins with a Supabase project-context lookup through MCP.</p>
+              <p>Each run begins with domain-grounded project context from Supabase, MCP, workflows, and local skills.</p>
             </div>
           </li>
           <li class="timeline-item">
             <time class="timeline-time">03</time>
             <div>
-              <h3>Audit results</h3>
-              <p>History, questions, and artifacts remain traceable in the local node.</p>
+              <h3>Refine and audit</h3>
+              <p>History, review checkpoints, and artifacts remain traceable so workflows can iterate safely and scale cleanly.</p>
             </div>
           </li>
         </ol>

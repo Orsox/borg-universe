@@ -27,6 +27,22 @@ class FakeLocalLlmClient:
         return {"content": '{"summary": "Plan next steps."}'}
 
 
+class ApprovalLoopLocalLlmClient:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def send_prompt(self, prompt: str) -> dict[str, str]:
+        self.calls.append(prompt)
+        return {
+            "content": "\n".join(
+                [
+                    "[tool_error] This command requires approval",
+                    "[tool_error] This command requires approval",
+                ]
+            )
+        }
+
+
 class FakeClaudeCodeClient:
     def __init__(self, project_root: str = "D:\\Workbench\\borg-universe") -> None:
         self.prompts: list[str] = []
@@ -543,9 +559,24 @@ steps:
                             },
                         ],
                         "implementation_tasks": [
-                            {"title": "Build module A parser", "prompt": "Implement only the parser."},
+                            {
+                                "title": "Build module A parser",
+                                "prompt": "Implement only the parser.",
+                                "workspace_metadata": {
+                                    "task_id": "impl-task-1",
+                                    "branch_name": "impl/impl-task-1",
+                                    "worktree_path": str(tmp_path / ".worktrees" / "impl" / "impl-task-1"),
+                                    "lifecycle_state": "prepared",
+                                },
+                            },
                             {"title": "Build module A tests", "prompt": "<nano-implant> Add focused parser tests."},
                         ],
+                        "workspace_metadata": {
+                            "workspace_id": "ws-arch-1",
+                            "branch_name": "queen/demo/architecture-v1",
+                            "worktree_path": str(tmp_path / ".worktrees" / "demo" / "queen-architecture-v1"),
+                            "lifecycle_state": "reviewable",
+                        },
                     }
                 ),
                 "response": {},
@@ -569,7 +600,187 @@ steps:
     assert [task.get("workflow_id") for task in created_tasks] == [None, None]
     assert [task["status"] for task in created_tasks] == ["draft", "draft"]
     assert all(task["description"].startswith("<nano-implant>") for task in created_tasks)
+    assert client.tables["tasks"][0]["workspace_metadata"]["workspace_id"] == "ws-arch-1"
+    assert created_tasks[0]["workspace_metadata"]["branch_name"] == "impl/impl-task-1"
+    assert created_tasks[0]["sequence_index"] == 1
+    assert created_tasks[1]["sequence_index"] == 2
     assert any(event["event_type"] == "implementation_tasks_created" for event in client.tables["task_events"])
+    assert any(event["event_type"] == "workspace_metadata_updated" for event in client.tables["task_events"])
+
+
+def test_worker_prefers_worktree_path_for_claude_workspace(tmp_path: Path, monkeypatch) -> None:
+    workflows_root = tmp_path / "workflows"
+    workflows_root.mkdir()
+    (workflows_root / "demo.yaml").write_text(
+        """id: demo
+title: Demo
+description: Workspace metadata routing test.
+status: draft
+entry_node: intake
+nodes:
+  - id: intake
+    borg_name: Queen
+    agent: borg-queen-architect
+    tasks:
+      - id: architecture-planning
+        title: Plan architecture
+        prompt: Route this through the queen architect.
+steps:
+  - id: intake
+    title: Intake
+    mode: sequential
+    nodes:
+      - intake
+""",
+        encoding="utf-8",
+    )
+    settings = _settings(tmp_path, workflows_root)
+    OrchestrationSettingsStore(settings.borg_root).save(
+        agent_selection=AgentSelectionSettings(agent_system="local_model", agent_name="borg-cpu"),
+        local_model=LocalModelSettings(model_name="borg-cpu"),
+    )
+    worktree_root = tmp_path / ".worktrees" / "demo" / "queen-architecture-v1"
+    worktree_root.mkdir(parents=True)
+    client = FakeSupabaseClient(
+        {
+            "tasks": [
+                {
+                    "id": "t1",
+                    "title": "Task 1",
+                    "description": "Implement the requested change.",
+                    "status": "queued",
+                    "workflow_id": "demo",
+                    "assigned_agent": "local-llm",
+                    "local_path": str(tmp_path / "project-root"),
+                    "workspace_metadata": {
+                        "workspace_id": "ws-1",
+                        "worktree_path": str(worktree_root),
+                        "branch_name": "queen/demo/architecture-v1",
+                        "lifecycle_state": "prepared",
+                    },
+                }
+            ],
+            "task_events": [],
+            "artifacts": [],
+        }
+    )
+    captured: dict[str, object] = {}
+
+    class CapturingClaudeCodeClient:
+        def __init__(self, *, settings, orchestration, workspace=None, runner=None, timeout_seconds=None, mcp_config_json=None):
+            captured["project_root"] = str(workspace.project_root) if workspace else None
+
+        def ensure_project_assets(self) -> dict[str, object]:
+            return {
+                "project_root": captured["project_root"],
+                "local_claude_root": f"{captured['project_root']}/.claude",
+                "global_agents_exists": False,
+                "local_agents_exists": True,
+                "global_skills_exists": False,
+                "local_skills_exists": True,
+                "agents": [],
+                "skills": [],
+            }
+
+        def send_prompt(self, prompt: str) -> dict[str, object]:
+            captured["prompt"] = prompt
+            return {
+                "content": '{"first_node_id": "intake", "summary": "Claude delegated to Borg agents."}',
+                "response": {},
+                "command": ["claude", "-p", "<prompt>", "--model", "borg-cpu"],
+                "stderr": "",
+            }
+
+    monkeypatch.setattr("app.services.agent_worker.ClaudeCodeClient", CapturingClaudeCodeClient)
+
+    worker = AgentWorker(
+        task_repository=TaskRepository(client),  # type: ignore[arg-type]
+        artifact_repository=ArtifactRepository(client),  # type: ignore[arg-type]
+        settings=settings,
+    )
+
+    worker.process_next_batch()
+
+    assert str(captured["project_root"]) == str(worktree_root)
+    assert "Workspace metadata:" in str(captured["prompt"])
+    assert f"- worktree_path: {worktree_root}" in str(captured["prompt"])
+
+
+def test_worker_emits_workspace_audit_events_for_git_nodes(tmp_path: Path) -> None:
+    workflows_root = tmp_path / "workflows"
+    workflows_root.mkdir()
+    (workflows_root / "demo.yaml").write_text(
+        """id: demo
+title: Demo
+description: Workspace audit event test.
+status: draft
+entry_node: git-prepare-architecture
+nodes:
+  - id: git-prepare-architecture
+    borg_name: Git Prepare Architecture Workspace
+    role: workspace_orchestrator
+    agent: borg-git-orchestrator
+    tasks:
+      - id: prepare-worktree
+        title: Prepare worktree
+        prompt: Prepare an isolated worktree.
+  - id: git-finalize-architecture
+    borg_name: Git Finalize Architecture Workspace
+    role: workspace_orchestrator
+    agent: borg-git-orchestrator
+    tasks:
+      - id: finalize-worktree
+        title: Finalize worktree
+        prompt: Finalize the isolated worktree.
+steps:
+  - id: architecture
+    title: Architecture
+    mode: sequential
+    nodes:
+      - git-prepare-architecture
+      - git-finalize-architecture
+""",
+        encoding="utf-8",
+    )
+    settings = _settings(tmp_path, workflows_root)
+    client = FakeSupabaseClient(
+        {
+            "tasks": [
+                {
+                    "id": "t1",
+                    "title": "Task 1",
+                    "status": "queued",
+                    "workflow_id": "demo",
+                    "assigned_agent": "local-llm",
+                    "workspace_metadata": {
+                        "workspace_id": "ws-1",
+                        "branch_name": "queen/demo/architecture-v1",
+                        "worktree_path": str(tmp_path / ".worktrees" / "demo" / "queen-architecture-v1"),
+                        "lifecycle_state": "prepared",
+                    },
+                }
+            ],
+            "task_events": [],
+            "artifacts": [],
+        }
+    )
+    worker = AgentWorker(
+        task_repository=TaskRepository(client),  # type: ignore[arg-type]
+        artifact_repository=ArtifactRepository(client),  # type: ignore[arg-type]
+        settings=settings,
+        local_llm_client=FakeLocalLlmClient(),
+    )
+
+    worker.process_next_batch()
+
+    event_types = [event["event_type"] for event in client.tables["task_events"]]
+    assert "workspace_prepare_started" in event_types
+    assert "workspace_prepare_completed" in event_types
+    assert "workspace_finalize_started" in event_types
+    assert "workspace_finalize_completed" in event_types
+    prepare_event = next(event for event in client.tables["task_events"] if event["event_type"] == "workspace_prepare_started")
+    assert prepare_event["payload"]["node_id"] == "git-prepare-architecture"
+    assert prepare_event["payload"]["workspace_metadata"]["workspace_id"] == "ws-1"
 
 
 def test_new_borg_cube_project_materializes_base_project_and_specs(tmp_path: Path) -> None:
@@ -1287,6 +1498,199 @@ steps:
     assert completed_event["payload"]["resume_stage_index"] == 1
 
 
+def test_worker_pauses_only_at_explicit_human_review_and_finishes_post_review_continuation(tmp_path: Path) -> None:
+    workflows_root = tmp_path / "workflows"
+    workflows_root.mkdir()
+    (workflows_root / "demo.yaml").write_text(
+        """id: demo
+title: Demo
+description: Explicit human review workflow.
+status: draft
+entry_node: intake
+nodes:
+  - id: intake
+    borg_name: Intake Agent
+    agent: local-llm
+    tasks:
+      - id: normalize
+        title: Normalize request
+        prompt: Normalize the task.
+  - id: auto-review
+    borg_name: Auto Review Agent
+    agent: local-llm
+    tasks:
+      - id: review-task
+        title: Review spec
+        prompt: Review the spec.
+  - id: human-review-node
+    borg_name: Human Review
+    role: reviewer
+    agent: local-llm
+    tasks:
+      - id: human-review-task
+        title: Human review handoff
+        prompt: Human review.
+  - id: synthesis-node
+    borg_name: Synthesis Agent
+    agent: local-llm
+    tasks:
+      - id: synthesize
+        title: Synthesize cube files
+        prompt: Synthesize the cube files.
+steps:
+  - id: intake
+    title: Intake
+    mode: sequential
+    nodes:
+      - intake
+  - id: automated-review
+    title: Automated Review
+    mode: sequential
+    nodes:
+      - auto-review
+  - id: human-review
+    title: Human Review
+    mode: sequential
+    nodes:
+      - human-review-node
+  - id: synthesis
+    title: Synthesis
+    mode: sequential
+    nodes:
+      - synthesis-node
+""",
+        encoding="utf-8",
+    )
+    settings = _settings(tmp_path, workflows_root)
+    client = FakeSupabaseClient(
+        {
+            "tasks": [{"id": "t1", "title": "Task 1", "status": "queued", "workflow_id": "demo", "assigned_agent": "local-llm"}],
+            "task_events": [],
+            "artifacts": [],
+        }
+    )
+    worker = AgentWorker(
+        task_repository=TaskRepository(client),  # type: ignore[arg-type]
+        artifact_repository=ArtifactRepository(client),  # type: ignore[arg-type]
+        settings=settings,
+        local_llm_client=FakeLocalLlmClient(),
+    )
+
+    worker.process_next_batch()
+
+    assert client.tables["tasks"][0]["status"] == "review_required"
+    review_required_event = next(event for event in client.tables["task_events"] if event["event_type"] == "workflow_review_required")
+    assert review_required_event["payload"]["review_stage_index"] == 2
+    assert review_required_event["payload"]["next_stage_index"] == 3
+    stage_starts = [event["payload"]["stage_index"] for event in client.tables["task_events"] if event["event_type"] == "workflow_stage_started"]
+    assert stage_starts == [0, 1]
+
+    client.tables["tasks"][0]["status"] = "queued"
+    client.tables["task_events"].append(
+        {
+            "id": "review-1",
+            "task_id": "t1",
+            "event_type": "human_review_confirmed",
+            "message": "Human review was confirmed and committed.",
+            "payload": {"review_stage_index": 2, "review_stage_id": "human-review", "resume_stage_index": 3, "notes": "Proceed with synthesis."},
+        }
+    )
+    client.tables["task_events"].append(
+        {
+            "id": "review-2",
+            "task_id": "t1",
+            "event_type": "workflow_resumed",
+            "message": "Review completed; the selected workflow stage is queued.",
+            "payload": {"review_stage_index": 2, "review_stage_id": "human-review", "resume_stage_index": 3},
+        }
+    )
+
+    worker.process_next_batch()
+
+    assert client.tables["tasks"][0]["status"] == "done"
+    all_stage_starts = [event["payload"]["stage_index"] for event in client.tables["task_events"] if event["event_type"] == "workflow_stage_started"]
+    assert all_stage_starts == [0, 1, 3]
+    assert not any(
+        event["event_type"] == "workflow_review_required" and event["payload"].get("review_stage_index") == 3
+        for event in client.tables["task_events"]
+    )
+
+
+def test_worker_blocks_premature_done_when_review_resume_has_no_post_review_stage(tmp_path: Path) -> None:
+    workflows_root = tmp_path / "workflows"
+    workflows_root.mkdir()
+    (workflows_root / "demo.yaml").write_text(
+        """id: demo
+title: Demo
+description: Invalid explicit review workflow.
+status: draft
+entry_node: intake
+nodes:
+  - id: intake
+    borg_name: Intake Agent
+    agent: local-llm
+    tasks:
+      - id: normalize
+        title: Normalize request
+        prompt: Normalize the task.
+  - id: human-review-node
+    borg_name: Human Review
+    role: reviewer
+    agent: local-llm
+    tasks:
+      - id: human-review-task
+        title: Human review handoff
+        prompt: Human review.
+steps:
+  - id: intake
+    title: Intake
+    mode: sequential
+    nodes:
+      - intake
+  - id: human-review
+    title: Human Review
+    mode: sequential
+    nodes:
+      - human-review-node
+""",
+        encoding="utf-8",
+    )
+    settings = _settings(tmp_path, workflows_root)
+    client = FakeSupabaseClient(
+        {
+            "tasks": [{"id": "t1", "title": "Task 1", "status": "queued", "workflow_id": "demo", "assigned_agent": "local-llm"}],
+            "task_events": [
+                {
+                    "id": "review-1",
+                    "task_id": "t1",
+                    "event_type": "human_review_confirmed",
+                    "message": "Human review was confirmed and committed.",
+                    "payload": {"review_stage_index": 1, "review_stage_id": "human-review", "resume_stage_index": 2, "notes": "Continue."},
+                },
+                {
+                    "id": "review-2",
+                    "task_id": "t1",
+                    "event_type": "workflow_resumed",
+                    "message": "Review completed; the selected workflow stage is queued.",
+                    "payload": {"review_stage_index": 1, "review_stage_id": "human-review", "resume_stage_index": 2},
+                },
+            ],
+            "artifacts": [],
+        }
+    )
+    worker = AgentWorker(
+        task_repository=TaskRepository(client),  # type: ignore[arg-type]
+        artifact_repository=ArtifactRepository(client),  # type: ignore[arg-type]
+        settings=settings,
+        local_llm_client=FakeLocalLlmClient(),
+    )
+
+    worker.process_next_batch()
+
+    assert client.tables["tasks"][0]["status"] == "failed"
+    assert any(event["event_type"] == "workflow_premature_completion_blocked" for event in client.tables["task_events"])
+
+
 def test_worker_executes_deterministic_python_command_gate(tmp_path: Path) -> None:
     workflows_root = tmp_path / "workflows"
     workflows_root.mkdir()
@@ -1431,6 +1835,276 @@ def test_worker_pauses_sparse_project_before_llm_delegation(tmp_path: Path) -> N
     assert not any(event["event_type"] == "llm_request" for event in client.tables["task_events"])
 
 
+def test_worker_requeues_task_on_temporary_dns_failure(tmp_path: Path) -> None:
+    workflows_root = tmp_path / "workflows"
+    workflows_root.mkdir()
+    settings = _settings(tmp_path, workflows_root)
+    client = FakeSupabaseClient(
+        {
+            "tasks": [{"id": "t1", "title": "Task 1", "status": "queued"}],
+            "task_events": [],
+            "artifacts": [],
+        }
+    )
+    worker = AgentWorker(
+        task_repository=TaskRepository(client),  # type: ignore[arg-type]
+        artifact_repository=ArtifactRepository(client),  # type: ignore[arg-type]
+        settings=settings,
+        local_llm_client=FakeLocalLlmClient(),
+    )
+
+    worker._project_lookup = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("[Errno -3] Temporary failure in name resolution"))  # type: ignore[attr-defined]
+    result = worker.process_task(client.tables["tasks"][0])
+
+    assert result["status"] == "queued"
+    assert result["retry"] is True
+    assert client.tables["tasks"][0]["status"] == "queued"
+    assert any(event["event_type"] == "worker_temporary_failure_requeued" for event in client.tables["task_events"])
+    assert not any(event["event_type"] == "worker_failed" for event in client.tables["task_events"])
+
+
+def test_worker_stops_requeue_after_temporary_failure_retry_budget(tmp_path: Path) -> None:
+    workflows_root = tmp_path / "workflows"
+    workflows_root.mkdir()
+    settings = _settings(tmp_path, workflows_root)
+    client = FakeSupabaseClient(
+        {
+            "tasks": [{"id": "t1", "title": "Task 1", "status": "queued"}],
+            "task_events": [
+                {"id": "e1", "task_id": "t1", "event_type": "worker_temporary_failure_requeued", "message": "m1", "payload": {}},
+                {"id": "e2", "task_id": "t1", "event_type": "worker_temporary_failure_requeued", "message": "m2", "payload": {}},
+                {"id": "e3", "task_id": "t1", "event_type": "worker_temporary_failure_requeued", "message": "m3", "payload": {}},
+            ],
+            "artifacts": [],
+        }
+    )
+    worker = AgentWorker(
+        task_repository=TaskRepository(client),  # type: ignore[arg-type]
+        artifact_repository=ArtifactRepository(client),  # type: ignore[arg-type]
+        settings=settings,
+        local_llm_client=FakeLocalLlmClient(),
+    )
+
+    worker._project_lookup = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("[Errno -3] Temporary failure in name resolution"))  # type: ignore[attr-defined]
+    result = worker.process_task(client.tables["tasks"][0])
+
+    assert result["status"] == "failed"
+    assert result["retry"] is False
+    assert client.tables["tasks"][0]["status"] == "failed"
+    assert any(event["event_type"] == "worker_temporary_failure_exhausted" for event in client.tables["task_events"])
+
+
+def test_worker_marks_needs_input_for_file_access_blocker(tmp_path: Path) -> None:
+    workflows_root = tmp_path / "workflows"
+    workflows_root.mkdir()
+    settings = _settings(tmp_path, workflows_root)
+    client = FakeSupabaseClient(
+        {
+            "tasks": [{"id": "t1", "title": "Task 1", "status": "queued"}],
+            "task_events": [],
+            "artifacts": [],
+        }
+    )
+    worker = AgentWorker(
+        task_repository=TaskRepository(client),  # type: ignore[arg-type]
+        artifact_repository=ArtifactRepository(client),  # type: ignore[arg-type]
+        settings=settings,
+        local_llm_client=FakeLocalLlmClient(),
+    )
+
+    worker._project_lookup = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("No such file or directory: /missing/project"))  # type: ignore[attr-defined]
+    result = worker.process_task(client.tables["tasks"][0])
+
+    assert result["status"] == "needs_input"
+    assert result["reason"] == "file_access_blocker"
+    assert client.tables["tasks"][0]["status"] == "needs_input"
+    assert any(event["event_type"] == "worker_file_access_blocked" for event in client.tables["task_events"])
+    assert not any(event["event_type"] == "worker_temporary_failure_requeued" for event in client.tables["task_events"])
+
+
+def test_worker_escalates_prompt_with_deep_after_three_similar_llm_responses(tmp_path: Path) -> None:
+    workflows_root = tmp_path / "workflows"
+    workflows_root.mkdir()
+    settings = _settings(tmp_path, workflows_root)
+    llm = FakeLocalLlmClient()
+    client = FakeSupabaseClient(
+        {
+            "tasks": [{"id": "t1", "title": "Task 1", "status": "queued"}],
+            "task_events": [
+                {
+                    "id": "e1",
+                    "task_id": "t1",
+                    "event_type": "llm_response",
+                    "message": "response",
+                    "payload": {"response": "Plan remains unchanged for this task."},
+                },
+                {
+                    "id": "e2",
+                    "task_id": "t1",
+                    "event_type": "llm_response",
+                    "message": "response",
+                    "payload": {"response": "Plan remains unchanged for this task"},
+                },
+                {
+                    "id": "e3",
+                    "task_id": "t1",
+                    "event_type": "llm_response",
+                    "message": "response",
+                    "payload": {"response": "Plan remains unchanged for this task!"},
+                },
+            ],
+            "artifacts": [],
+        }
+    )
+    worker = AgentWorker(
+        task_repository=TaskRepository(client),  # type: ignore[arg-type]
+        artifact_repository=ArtifactRepository(client),  # type: ignore[arg-type]
+        settings=settings,
+        local_llm_client=llm,
+    )
+    worker._project_lookup = lambda *args, **kwargs: {"tool": "project.search", "result_count": 0, "result": {}}  # type: ignore[attr-defined]
+
+    worker.process_task(client.tables["tasks"][0])
+
+    assert llm.calls
+    assert llm.calls[0].startswith("<deep>\n")
+    escalation_event = next(event for event in client.tables["task_events"] if event["event_type"] == "llm_deep_escalation_requested")
+    assert escalation_event["payload"]["similar_response_streak"] >= 3
+    assert escalation_event["payload"]["limit"] == 3
+
+
+def test_worker_does_not_escalate_with_deep_below_similarity_limit(tmp_path: Path) -> None:
+    workflows_root = tmp_path / "workflows"
+    workflows_root.mkdir()
+    settings = _settings(tmp_path, workflows_root)
+    llm = FakeLocalLlmClient()
+    client = FakeSupabaseClient(
+        {
+            "tasks": [{"id": "t1", "title": "Task 1", "status": "queued"}],
+            "task_events": [
+                {
+                    "id": "e1",
+                    "task_id": "t1",
+                    "event_type": "llm_response",
+                    "message": "response",
+                    "payload": {"response": "Partial prior answer"},
+                },
+                {
+                    "id": "e2",
+                    "task_id": "t1",
+                    "event_type": "llm_response",
+                    "message": "response",
+                    "payload": {"response": "Partial prior answer with some change"},
+                },
+            ],
+            "artifacts": [],
+        }
+    )
+    worker = AgentWorker(
+        task_repository=TaskRepository(client),  # type: ignore[arg-type]
+        artifact_repository=ArtifactRepository(client),  # type: ignore[arg-type]
+        settings=settings,
+        local_llm_client=llm,
+    )
+    worker._project_lookup = lambda *args, **kwargs: {"tool": "project.search", "result_count": 0, "result": {}}  # type: ignore[attr-defined]
+
+    worker.process_task(client.tables["tasks"][0])
+
+    assert llm.calls
+    assert not llm.calls[0].startswith("<deep>\n")
+    assert not any(event["event_type"] == "llm_deep_escalation_requested" for event in client.tables["task_events"])
+
+
+def test_worker_stops_on_repeated_tool_approval_loop_output(tmp_path: Path) -> None:
+    workflows_root = tmp_path / "workflows"
+    workflows_root.mkdir()
+    settings = _settings(tmp_path, workflows_root)
+    llm = ApprovalLoopLocalLlmClient()
+    client = FakeSupabaseClient(
+        {
+            "tasks": [{"id": "t1", "title": "Task 1", "status": "queued"}],
+            "task_events": [],
+            "artifacts": [],
+        }
+    )
+    worker = AgentWorker(
+        task_repository=TaskRepository(client),  # type: ignore[arg-type]
+        artifact_repository=ArtifactRepository(client),  # type: ignore[arg-type]
+        settings=settings,
+        local_llm_client=llm,
+    )
+
+    result = worker.process_task(client.tables["tasks"][0])
+
+    assert result["status"] == "needs_input"
+    assert result["reason"] == "file_access_blocker"
+    assert client.tables["tasks"][0]["status"] == "needs_input"
+    assert any(event["event_type"] == "worker_file_access_blocked" for event in client.tables["task_events"])
+
+
+def test_new_borg_cube_project_does_not_pause_sparse_project_before_llm(tmp_path: Path) -> None:
+    workflows_root = tmp_path / "workflows"
+    workflows_root.mkdir()
+    (workflows_root / "new_borg_cube_project.yaml").write_text(
+        """id: new_borg_cube_project
+title: New Borg Cube Project
+description: Create scaffold and specs.
+status: queued
+entry_node: intake
+nodes:
+  - id: intake
+    borg_name: Intake
+    agent: local-llm
+    tasks:
+      - id: plan
+        title: Plan
+        prompt: Plan the scaffold.
+steps:
+  - id: intake
+    title: Intake
+    mode: sequential
+    nodes:
+      - intake
+""",
+        encoding="utf-8",
+    )
+    project_root = tmp_path / "new-project"
+    project_root.mkdir()
+    (project_root / ".claude").mkdir(parents=True)
+    settings = _settings(tmp_path, workflows_root)
+    client = FakeSupabaseClient(
+        {
+            "tasks": [
+                {
+                    "id": "t1",
+                    "title": "Tetris - New Borg Cube Project",
+                    "description": "Simple embedded helper.",
+                    "status": "queued",
+                    "workflow_id": "new_borg_cube_project",
+                    "assigned_agent": "local-llm",
+                    "project_id": "tetris",
+                    "local_path": str(project_root),
+                }
+            ],
+            "task_events": [],
+            "artifacts": [],
+        }
+    )
+    worker = AgentWorker(
+        task_repository=TaskRepository(client),  # type: ignore[arg-type]
+        artifact_repository=ArtifactRepository(client),  # type: ignore[arg-type]
+        settings=settings,
+        local_llm_client=FakeLocalLlmClient(),
+    )
+
+    result = worker.process_task(client.tables["tasks"][0])
+
+    assert result["status"] == "review_required"
+    assert client.tables["tasks"][0]["status"] == "review_required"
+    assert not any(event["event_type"] == "project_context_missing" for event in client.tables["task_events"])
+    assert any(event["event_type"] == "llm_request" for event in client.tables["task_events"])
+
+
 def test_worker_requeues_stale_running_tasks_before_processing_queue(tmp_path: Path) -> None:
     workflows_root = tmp_path / "workflows"
     workflows_root.mkdir()
@@ -1487,6 +2161,7 @@ def _settings(tmp_path: Path, workflows_root: Path) -> Settings:
         skills_root=tmp_path,
         workflows_root=workflows_root,
         artifact_root=tmp_path,
+        workbench_root=tmp_path / "workbench",
         supabase_url=None,
         supabase_anon_key=None,
         supabase_service_role_key=None,
