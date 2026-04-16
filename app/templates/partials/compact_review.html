@@ -1,0 +1,58 @@
+<div class="section panel">
+  <div class="panel-header">
+    <h2>Review Changes / Human Feedback</h2>
+    <span class="badge {{ task.status|badge_class }}">{{ task.status }}</span>
+  </div>
+  <div class="panel-body">
+    <div class="callout compact-review-summary">
+      <strong>Task Summary</strong>
+      {% if llm_review %}
+      <p>{{ llm_review.summary }}</p>
+      {% else %}
+      <p>No summary available yet.</p>
+      {% endif %}
+    </div>
+
+    <div class="callout compact-cube-preview">
+      <strong>Planned Cube Output</strong>
+      {% if cube_files %}
+      <ul class="cube-file-list">
+        {% for file in cube_files %}
+        <li><code>{{ file.name }}</code> -> {{ file.description }}</li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p>No cube files identified for update.</p>
+      {% endif %}
+    </div>
+
+    <form method="post" action="/tasks/{{ task.id }}/review" onsubmit="this.querySelector('button[type=submit]').disabled = true; this.querySelector('button[type=submit]').innerHTML = 'Review committed...'; document.querySelector('.compact-review-status').style.display = 'block';">
+      <input type="hidden" name="review_action" value="confirm">
+      {% if suggested_resume_stage_index is not none %}
+      <input type="hidden" name="resume_stage_index" value="{{ suggested_resume_stage_index }}">
+      {% endif %}
+
+      <div class="form-grid">
+        <label class="full">
+          <strong>Review Changes / Human Feedback</strong>
+          <textarea name="review_notes" rows="6" placeholder="Describe what should be changed, corrected, approved, or clarified before continuation"></textarea>
+        </label>
+      </div>
+      
+      <div class="actions">
+        <button type="submit" name="action" value="confirm">Commit Review</button>
+      </div>
+
+      <div class="compact-review-status" style="display: none; margin-top: 1rem; color: var(--text-success); font-weight: bold;">
+        <span class="spinner"></span> Continuing workflow / Applying human feedback...
+      </div>
+    </form>
+  </div>
+</div>
+
+<style>
+.compact-review-summary p { margin-top: 0.5rem; }
+.cube-file-list { list-style: none; padding: 0; margin-top: 0.5rem; }
+.cube-file-list li { margin-bottom: 0.25rem; }
+.cube-file-list code { background: var(--bg-secondary); padding: 0.1rem 0.3rem; border-radius: 4px; font-family: monospace; }
+</style>
