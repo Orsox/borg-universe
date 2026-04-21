@@ -5,7 +5,7 @@ import re
 from typing import Annotated, Any
 from urllib.parse import parse_qs
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.core.config import Settings, get_settings
@@ -66,12 +66,16 @@ async def list_tasks(repo: Annotated[TaskRepository, Depends(get_task_repository
 @router.post("/api/tasks", status_code=status.HTTP_201_CREATED)
 async def create_task(
     payload: TaskCreate,
+    background_tasks: BackgroundTasks,
+    settings: Annotated[Settings, Depends(get_settings)],
     repo: Annotated[TaskRepository, Depends(get_task_repository)],
 ) -> dict:
     try:
-        return repo.create_task(payload)
+        created = repo.create_task(payload)
     except SupabaseRestError as exc:
         raise _handle_repository_error(exc) from exc
+    _schedule_task_processing(background_tasks, settings, created["id"])
+    return created
 
 
 @router.get("/api/tasks/{task_id}")
@@ -114,14 +118,14 @@ async def update_task_status(
 
 
 @router.post("/api/tasks/{task_id}/queue")
-async def queue_task(task_id: str, repo: Annotated[TaskRepository, Depends(get_task_repository)]) -> dict:
-    try:
-        task = repo.update_status(task_id, "queued")
-    except SupabaseRestError as exc:
-        raise _handle_repository_error(exc) from exc
-    if not task:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
-    repo.add_event(task_id, "task_queued", "Task queued for worker processing.", {})
+async def queue_task(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    settings: Annotated[Settings, Depends(get_settings)],
+    repo: Annotated[TaskRepository, Depends(get_task_repository)],
+) -> dict:
+    task = _queue_task(repo, task_id)
+    _schedule_task_processing(background_tasks, settings, task_id)
     return task
 
 
@@ -190,6 +194,8 @@ async def tasks_dashboard(
 @router.post("/tasks")
 async def create_task_from_form(
     request: Request,
+    background_tasks: BackgroundTasks,
+    settings: Annotated[Settings, Depends(get_settings)],
     repo: Annotated[TaskRepository, Depends(get_task_repository)],
     project_repo: Annotated[ProjectRepository, Depends(get_project_repository)],
     workflow_store: Annotated[WorkflowStore, Depends(get_workflow_store)],
@@ -224,6 +230,7 @@ async def create_task_from_form(
         )
     except SupabaseRestError as exc:
         raise _handle_repository_error(exc) from exc
+    _schedule_task_processing(background_tasks, settings, created["id"])
     return RedirectResponse(f"/tasks/{created['id']}", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -268,6 +275,39 @@ def _latest_cube_plan(events: list[dict[str, object]]) -> list[dict[str, str]]:
         if files:
             return files
     return []
+
+
+def _latest_human_review_input(task: dict[str, Any], events: list[dict[str, object]]) -> str:
+    persisted = str(task.get("human_review_input") or "").strip()
+    if persisted:
+        return persisted
+    for event in reversed(events):
+        payload = event.get("payload") or {}
+        if not isinstance(payload, dict):
+            continue
+        value = str(payload.get("human_review_input") or payload.get("notes") or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _latest_workcube_context(events: list[dict[str, object]]) -> dict[str, Any] | None:
+    for event in reversed(events):
+        payload = event.get("payload") or {}
+        if not isinstance(payload, dict):
+            continue
+        if not any(key.startswith("workcube_") for key in payload):
+            continue
+        return {
+            "event_type": str(event.get("event_type") or ""),
+            "created_at": str(event.get("created_at") or "").strip(),
+            "missing_detected": bool(payload.get("workcube_missing_detected")),
+            "created": bool(payload.get("workcube_created")),
+            "path": str(payload.get("workcube_path") or "").strip(),
+            "reason": str(payload.get("workcube_creation_reason") or "").strip(),
+            "error": str(payload.get("workcube_creation_error") or "").strip(),
+        }
+    return None
 
 
 def _review_stage_state(
@@ -459,6 +499,8 @@ async def task_detail(
     cube_files = []
     workflow_stage_options = []
     suggested_resume_stage_index = None
+    human_review_input = _latest_human_review_input(task, events)
+    workcube_context = _latest_workcube_context(events)
     actionable_context = _latest_actionable_context(events)
     error_context = _latest_error_context(events) if task.get("status") == "failed" else None
     needs_input_guidance = (
@@ -504,6 +546,8 @@ async def task_detail(
             "error_context": error_context,
             "needs_input_guidance": needs_input_guidance,
             "cube_files": cube_files,
+            "human_review_input": human_review_input,
+            "workcube_context": workcube_context,
             "workflow_stage_options": workflow_stage_options,
             "suggested_resume_stage_index": suggested_resume_stage_index,
             "detail_fields": [
@@ -622,6 +666,8 @@ async def review_task(
     llm_review = _latest_llm_review(events)
     llm_transcript = _build_llm_transcript(events)
     llm_human_output = _latest_llm_human_output(events, llm_transcript, llm_review)
+    human_review_input = _latest_human_review_input(task, events)
+    workcube_context = _latest_workcube_context(events)
     actionable_context = _latest_actionable_context(events)
     needs_input_guidance = (
         _build_needs_input_guidance(task, actionable_context)
@@ -652,6 +698,8 @@ async def review_task(
             "llm_review": llm_review,
             "llm_transcript": llm_transcript,
             "llm_human_output": llm_human_output,
+            "human_review_input": human_review_input,
+            "workcube_context": workcube_context,
             "actionable_context": actionable_context,
             "needs_input_guidance": needs_input_guidance,
             "projects": projects,
@@ -666,11 +714,11 @@ async def review_task(
             "supabase_configured": settings.supabase_configured,
             "mcp_configured": bool(settings.mcp_server_url),
             "review_actions": [
-                {"value": "save", "label": "Save review"},
-                {"value": "confirm", "label": "Confirm and continue"},
-                {"value": "start_implementation", "label": "Start implementation"},
-                {"value": "request_changes", "label": "Request changes"},
-                {"value": "cancel", "label": "Cancel task"},
+                {"value": "save", "label": "Review speichern"},
+                {"value": "confirm", "label": "Review absenden und fortsetzen"},
+                {"value": "start_implementation", "label": "Implementierung starten"},
+                {"value": "request_changes", "label": "Aenderungen anfordern"},
+                {"value": "cancel", "label": "Task abbrechen"},
             ],
             "workflow_stage_options": workflow_stage_options,
             "suggested_resume_stage_index": suggested_resume_stage_index,
@@ -698,6 +746,8 @@ async def review_task(
 async def submit_task_review(
     task_id: str,
     request: Request,
+    background_tasks: BackgroundTasks,
+    settings: Annotated[Settings, Depends(get_settings)],
     repo: Annotated[TaskRepository, Depends(get_task_repository)],
     workflow_store: Annotated[WorkflowStore, Depends(get_workflow_store)],
 ) -> RedirectResponse:
@@ -714,7 +764,10 @@ async def submit_task_review(
     repo.update_fields(task_id, updates)
 
     review_notes = _optional(form.get("review_notes"))
+    if review_notes is not None:
+        updates["human_review_input"] = review_notes
     events = repo.list_events(task_id)
+    workcube_context = _latest_workcube_context(events)
     review_stage_state = _review_stage_state(workflow_store, repo, task_id, events)
     if updates:
         repo.add_event(
@@ -728,7 +781,7 @@ async def submit_task_review(
             task_id,
             "review_noted",
             "Review notes were recorded.",
-            {"notes": review_notes},
+            {"notes": review_notes, "human_review_input": review_notes, **(workcube_context or {})},
         )
 
     if action in {"confirm", "start_implementation"}:
@@ -740,10 +793,12 @@ async def submit_task_review(
             "Review confirmed; task will continue through the workflow chain.",
             {
                 "notes": review_notes,
+                "human_review_input": review_notes,
                 "changes": updates,
                 "action": action,
                 "review_stage_index": review_stage_state.get("review_stage_index") if review_stage_state else None,
                 "review_stage_id": review_stage_state.get("review_stage_id") if review_stage_state else None,
+                **(workcube_context or {}),
             },
         )
         if action == "start_implementation":
@@ -798,12 +853,14 @@ async def submit_task_review(
             "Review completed; the selected workflow stage is queued.",
             {
                 "notes": review_notes,
+                "human_review_input": review_notes,
                 "changes": updates,
                 "next_step": "workflow_nodes",
                 "resume_stage_index": resume_stage_index,
                 "action": action,
                 "review_stage_index": current_review_stage_index,
                 "review_stage_id": current_review_stage_id,
+                **(workcube_context or {}),
             },
         )
         print(f"[REVIEW] committed for task {task_id}")
@@ -816,9 +873,11 @@ async def submit_task_review(
             {
                 "action": action,
                 "notes": review_notes,
+                "human_review_input": review_notes,
                 "resume_stage_index": resume_stage_index,
                 "review_stage_index": current_review_stage_index,
                 "review_stage_id": current_review_stage_id,
+                **(workcube_context or {}),
             },
         )
         repo.add_event(
@@ -829,6 +888,8 @@ async def submit_task_review(
                 "review_stage_index": current_review_stage_index,
                 "resume_stage_index": resume_stage_index,
                 "cube_files": recomputed_cube_plan,
+                "human_review_input": review_notes,
+                **(workcube_context or {}),
             },
         )
         print("[WORKFLOW] review completed")
@@ -838,6 +899,7 @@ async def submit_task_review(
             f"[WORKFLOW] advanced from review node {current_review_stage_id or current_review_stage_index} to {resume_stage_index}"
         )
         _queue_task(repo, task_id)
+        _schedule_task_processing(background_tasks, settings, task_id)
         print(f"[WORKFLOW] dispatching task {task_id} after review")
         return RedirectResponse(f"/tasks/{task_id}", status_code=status.HTTP_303_SEE_OTHER)
     elif action == "request_changes":
@@ -846,7 +908,7 @@ async def submit_task_review(
             task_id,
             "review_changes_requested",
             "Review requested changes and paused the workflow chain.",
-            {"notes": review_notes, "changes": updates},
+            {"notes": review_notes, "human_review_input": review_notes, "changes": updates, **(workcube_context or {})},
         )
     elif action == "cancel":
         repo.update_status(task_id, "cancelled")
@@ -854,7 +916,7 @@ async def submit_task_review(
             task_id,
             "review_cancelled",
             "Review cancelled the task and stopped the workflow chain.",
-            {"notes": review_notes, "changes": updates},
+            {"notes": review_notes, "human_review_input": review_notes, "changes": updates, **(workcube_context or {})},
         )
         return RedirectResponse(f"/tasks/{task_id}", status_code=status.HTTP_303_SEE_OTHER)
     else:
@@ -863,7 +925,7 @@ async def submit_task_review(
             task_id,
             "review_saved",
             "Review saved without advancing the workflow chain.",
-            {"notes": review_notes, "changes": updates},
+            {"notes": review_notes, "human_review_input": review_notes, "changes": updates, **(workcube_context or {})},
         )
 
     return RedirectResponse(f"/tasks/{task_id}/review", status_code=status.HTTP_303_SEE_OTHER)
@@ -873,12 +935,15 @@ async def submit_task_review(
 async def update_task_status_from_form(
     task_id: str,
     request: Request,
+    background_tasks: BackgroundTasks,
+    settings: Annotated[Settings, Depends(get_settings)],
     repo: Annotated[TaskRepository, Depends(get_task_repository)],
 ) -> RedirectResponse:
     form = await _read_urlencoded_form(request)
     status_value = form.get("status", "draft")
     if status_value == "queued":
         _queue_task(repo, task_id)
+        _schedule_task_processing(background_tasks, settings, task_id)
     else:
         repo.update_status(task_id, status_value)
     return RedirectResponse(f"/tasks/{task_id}", status_code=status.HTTP_303_SEE_OTHER)
@@ -887,9 +952,12 @@ async def update_task_status_from_form(
 @router.post("/tasks/{task_id}/queue")
 async def queue_task_from_form(
     task_id: str,
+    background_tasks: BackgroundTasks,
+    settings: Annotated[Settings, Depends(get_settings)],
     repo: Annotated[TaskRepository, Depends(get_task_repository)],
 ) -> RedirectResponse:
     _queue_task(repo, task_id)
+    _schedule_task_processing(background_tasks, settings, task_id)
     return RedirectResponse(f"/tasks/{task_id}", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -944,6 +1012,12 @@ def _queue_task(repo: TaskRepository, task_id: str) -> dict | None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
     repo.add_event(task_id, "task_queued", "Task queued for worker processing.", {})
     return task
+
+
+def _schedule_task_processing(background_tasks: BackgroundTasks, settings: Settings, task_id: str) -> None:
+    from app.main import _start_task_processing
+
+    background_tasks.add_task(_start_task_processing, settings, task_id)
 
 
 def _workflow_stage_options(workflow_store: WorkflowStore, workflow_id: str | None) -> list[dict[str, object]]:

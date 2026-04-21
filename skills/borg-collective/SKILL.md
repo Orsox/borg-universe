@@ -121,7 +121,7 @@ Return the result in this format:
 - Prefer file paths over vague descriptions.
 - Do not modify code while using this skill.
 - Do not invent requirements that are not supported by `borg-cube.md` or nearby code.
-- If no `borg-cube.md` is found, explicitly say so and fall back to code structure analysis.
+- If no `borg-cube.md` is found, explicitly say so, infer the owning area from nearby evidence, and create a minimal `borg-cube.md` when the correct location is clear enough.
 - If the spec and implementation conflict, mention the conflict clearly.
 
 ## Fallback behaviour
@@ -130,6 +130,8 @@ If no `borg-cube.md` exists:
 - infer the feature boundaries from directory structure, module names, README files, and tests
 - state clearly that the feature spec file is missing
 - list the most likely files that define behaviour
+- create a minimal `borg-cube.md` in the best-fitting module, docs, or workspace-root location when confidence is high
+- explain where the new file was placed and why that location was chosen
 
 ## Example intent
 

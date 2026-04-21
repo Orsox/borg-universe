@@ -1,0 +1,66 @@
+id: borg-nanoprobe-repair
+title: Borg Nanoprobe Repair
+description: Deploy nanoprobes to diagnose and repair defective code segments. The drone analyzes issue context, locates damaged subsystems, applies targeted repairs, and validates structural integrity.
+status: defined
+entry_node: nanoprobe-drone
+nodes:
+  - id: nanoprobe-drone
+    borg_name: Nanoprobe Repair Drone
+    role: implementer
+    agent: borg-nanoprobe-drone
+    tasks:
+      - id: locate-cube-context
+        title: Locate the relevant borg-cube context
+        prompt: >-
+          Search the repository for the relevant borg-cube.md before repairing code.
+          If none matches the issue, determine the correct module boundary from code,
+          tests, entry points, and docs. When confidence is high, create or update
+          the missing borg-cube.md at the correct location. When confidence is not
+          high enough, return a focused follow-up task with specific search and
+          documentation instructions instead of guessing.
+        skills:
+          - borg-collective
+          - borg-module-cataloger
+          - borg-cube-printer
+          - borg-task-decomposer
+      - id: diagnose-and-repair
+        title: Diagnose and repair the defect
+        prompt: >-
+          Goal: Repair the described defect(s)
+          Scope: Analyze issue context, locate damaged subsystems, apply targeted nanoprobe repair, validate integrity
+          Constraints:
+          - Do not assimilate unrelated code
+          - Write or update tests to cover the repair
+          - Verify repair resolves the defect without destabilizing adjacent systems
+          - Do not report "no cube files identified" until you have searched the project for the correct borg-cube.md ownership
+          - If no matching borg-cube.md exists, infer the owning module from repository evidence and create one when confidence is high
+          - When a new borg-cube.md is created, explain in the review text that it was missing, where it was written, and why that location was selected
+          - If confidence is too low for safe cube creation, return a specific follow-up task for targeted repository inspection
+          - Report root cause, modified components, and validation results
+        status: draft
+  - id: integrity-scan
+    borg_name: Post-Repair Integrity Scan
+    role: validator
+    agent: borg-nanoprobe-drone
+    tasks:
+      - id: validate-repair
+        title: Validate nanoprobe repair integrity
+        prompt: >-
+          Goal: Validate that the repair correctly resolves the defect
+          Scope: Run diagnostics, check for destabilization, verify expected behavior
+          Constraints:
+          - All diagnostics must pass
+          - No new anomalies or errors introduced
+          - Produce a compact integrity report
+        status: draft
+steps:
+  - id: repair
+    title: Diagnose and repair defect
+    mode: sequential
+    nodes:
+      - nanoprobe-drone
+  - id: validation
+    title: Post-repair integrity scan
+    mode: sequential
+    nodes:
+      - integrity-scan

@@ -17,7 +17,7 @@ from app.services.local_llm_client import LocalLlmClient, LocalLlmClientError
 from app.services.orchestration_settings_store import LocalModelSettings, OrchestrationSettings
 
 
-DEFAULT_PROMPT = "Antworte mir mit einem einfachen Hallo"
+DEFAULT_PROMPT = "Reply with the exact text hello"
 DEFAULT_LOG_FILE = REPO_ROOT / "tests" / "artifacts" / "test-logs" / "local_llm_smoke.log"
 DEFAULT_CONFIG_FILE = REPO_ROOT / "BORG" / "config" / "orchestration.json"
 

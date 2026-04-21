@@ -1,0 +1,152 @@
+{% extends "ui_template.html" %}
+
+{% block title %}Issues - Borg Universe{% endblock %}
+{% block eyebrow %}Issues{% endblock %}
+{% block heading %}Issue tracker{% endblock %}
+{% block summary %}Track and fix issues across projects. Sorted by most recent updates.{% endblock %}
+
+{% block content %}
+
+<section class="section panel">
+  <div class="panel-header">
+    <h2>New issue</h2>
+  </div>
+  <div class="panel-body">
+    <form method="post" action="/issues">
+      <div class="form-grid">
+        <label class="full">Title
+          <input name="title" required placeholder="Short issue summary">
+        </label>
+        <label class="full">Description
+          <textarea name="description" rows="4" placeholder="Describe the issue in detail"></textarea>
+        </label>
+        <label>Project
+          <select name="project_id">
+            <option value="">No project</option>
+            {% for project in projects %}
+            <option value="{{ project.id }}" {{ 'selected' if selected_project_id == project.id else '' }}>{{ project.name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Priority
+          <select name="priority">
+            {% for p in priorities %}
+            <option value="{{ p }}" {{ 'selected' if p == 'medium' else '' }}>{{ p|pretty }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+      <div class="actions">
+        <button type="submit">Create issue</button>
+      </div>
+    </form>
+  </div>
+</section>
+
+<section class="section">
+  <div class="filters">
+    <label>Filter by project
+      <select id="project-filter" onchange="applyProjectFilter()">
+        <option value="">All projects</option>
+        {% for project in projects %}
+        <option value="{{ project.id }}" {{ 'selected' if selected_project_id == project.id else '' }}>{{ project.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </div>
+
+  <form id="workflow-form" method="post" action="/issues/start-workflow">
+    <div class="workflow-bar" style="display:flex;gap:1rem;align-items:center;margin-bottom:1rem;padding:0.75rem 1rem;background:var(--surface-1,#1a1a2e);border-radius:8px;">
+      <label style="display:flex;align-items:center;gap:0.5rem;margin:0;">
+        <input type="checkbox" id="select-all" onchange="toggleSelectAll(this)">
+        <span>Select all</span>
+      </label>
+      <select name="workflow_id" required style="flex:1;max-width:300px;">
+        <option value="">Select workflow…</option>
+        {% for wf in workflows %}
+        <option value="{{ wf.id }}">{{ wf.title }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" id="start-workflow-btn" disabled>Start workflow</button>
+      <span id="selected-count" style="font-size:0.85rem;opacity:0.7;">0 selected</span>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:2.5rem;"></th>
+            <th>Title</th>
+            <th>Status</th>
+            <th>Priority</th>
+            <th>Project</th>
+            <th>Updated</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for issue in issues %}
+          <tr>
+            <td><input type="checkbox" name="issue_ids" value="{{ issue.id }}" class="issue-check" onchange="updateSelection()"></td>
+            <td>{{ issue.title }}</td>
+            <td><span class="badge {{ issue.status|badge_class }}">{{ issue.status|pretty }}</span></td>
+            <td><span class="badge {{ 'review_required' if issue.priority in ('high', 'critical') else 'queued' if issue.priority == 'medium' else '' }}">{{ issue.priority|pretty }}</span></td>
+            <td>{{ project_labels.get(issue.project_id, issue.project_id or "—") }}</td>
+            <td>{{ issue.updated_at or "" }}</td>
+            <td>
+              {% if issue.status == 'open' %}
+              <form class="inline-form" method="post" action="/issues/{{ issue.id }}/status">
+                <input type="hidden" name="status" value="in_progress">
+                <button type="submit" class="secondary">Start</button>
+              </form>
+              {% elif issue.status == 'in_progress' %}
+              <form class="inline-form" method="post" action="/issues/{{ issue.id }}/status">
+                <input type="hidden" name="status" value="resolved">
+                <button type="submit" class="secondary">Resolve</button>
+              </form>
+              {% elif issue.status == 'resolved' %}
+              <form class="inline-form" method="post" action="/issues/{{ issue.id }}/status">
+                <input type="hidden" name="status" value="closed">
+                <button type="submit" class="secondary">Close</button>
+              </form>
+              {% else %}
+              <form class="inline-form" method="post" action="/issues/{{ issue.id }}/status">
+                <input type="hidden" name="status" value="open">
+                <button type="submit" class="secondary">Reopen</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="7">{% include "partials/empty.html" with context %}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </form>
+</section>
+
+<script>
+  function applyProjectFilter() {
+    const projectId = document.getElementById("project-filter").value;
+    const url = new URL(window.location.origin + "/issues");
+    if (projectId) {
+      url.searchParams.set("project_id", projectId);
+    }
+    window.location.href = url.toString();
+  }
+
+  function toggleSelectAll(source) {
+    document.querySelectorAll(".issue-check").forEach(cb => { cb.checked = source.checked; });
+    updateSelection();
+  }
+
+  function updateSelection() {
+    const checked = document.querySelectorAll(".issue-check:checked").length;
+    const total = document.querySelectorAll(".issue-check").length;
+    document.getElementById("selected-count").textContent = checked + " selected";
+    document.getElementById("start-workflow-btn").disabled = checked === 0;
+    document.getElementById("select-all").checked = checked === total && total > 0;
+  }
+</script>
+{% endblock %}

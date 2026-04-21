@@ -482,6 +482,71 @@ steps:
     assert client.tables["tasks"][0]["status"] == "review_required"
 
 
+def test_borg_nanoprobe_repair_prompt_requires_cube_search_and_follow_up(tmp_path: Path) -> None:
+    workflows_root = tmp_path / "workflows"
+    workflows_root.mkdir()
+    (workflows_root / "borg-nanoprobe-repair.yaml").write_text(
+        """id: borg-nanoprobe-repair
+title: Borg Nanoprobe Repair
+description: Repair defects with cube ownership discovery.
+status: defined
+entry_node: nanoprobe-drone
+nodes:
+  - id: nanoprobe-drone
+    borg_name: Nanoprobe Repair Drone
+    agent: borg-nanoprobe-drone
+    tasks:
+      - id: diagnose-and-repair
+        title: Diagnose and repair the defect
+        prompt: Repair the defect.
+steps:
+  - id: repair
+    title: Repair
+    mode: sequential
+    nodes:
+      - nanoprobe-drone
+""",
+        encoding="utf-8",
+    )
+    settings = _settings(tmp_path, workflows_root)
+    OrchestrationSettingsStore(settings.borg_root).save(
+        agent_selection=AgentSelectionSettings(agent_system="local_model", agent_name="borg-cpu"),
+        local_model=LocalModelSettings(model_name="borg-cpu"),
+    )
+    client = FakeSupabaseClient(
+        {
+            "tasks": [
+                {
+                    "id": "t1",
+                    "title": "Borg Nanoprobe Repair: hello not Hallo",
+                    "description": "[Issue] hello not Hallo",
+                    "status": "queued",
+                    "workflow_id": "borg-nanoprobe-repair",
+                    "assigned_agent": "local-llm",
+                    "local_path": str(tmp_path),
+                }
+            ],
+            "task_events": [],
+            "artifacts": [],
+        }
+    )
+    claude = FakeClaudeCodeClient(project_root=str(tmp_path))
+    worker = AgentWorker(
+        task_repository=TaskRepository(client),  # type: ignore[arg-type]
+        artifact_repository=ArtifactRepository(client),  # type: ignore[arg-type]
+        settings=settings,
+        claude_code_client=claude,
+    )
+
+    worker.process_next_batch()
+
+    assert len(claude.prompts) == 1
+    assert "Nanoprobe repair spec rules:" in claude.prompts[0]
+    assert "search the repository for the nearest matching borg-cube.md" in claude.prompts[0]
+    assert "set materialize_borg_cube_files true" in claude.prompts[0]
+    assert "create a small implementation_tasks follow-up" in claude.prompts[0]
+
+
 def test_worker_stores_structured_borg_cube_specs_and_implementation_tasks(tmp_path: Path) -> None:
     workflows_root = tmp_path / "workflows"
     workflows_root.mkdir()
@@ -606,6 +671,102 @@ steps:
     assert created_tasks[1]["sequence_index"] == 2
     assert any(event["event_type"] == "implementation_tasks_created" for event in client.tables["task_events"])
     assert any(event["event_type"] == "workspace_metadata_updated" for event in client.tables["task_events"])
+
+
+def test_worker_auto_creates_missing_workcube_and_records_review_context(tmp_path: Path) -> None:
+    workflows_root = tmp_path / "workflows"
+    workflows_root.mkdir()
+    (workflows_root / "demo.yaml").write_text(
+        """id: demo
+title: Demo
+description: Missing borg-cube auto creation test.
+status: draft
+entry_node: intake
+nodes:
+  - id: intake
+    borg_name: Queen
+    agent: borg-nanoprobe-drone
+    tasks:
+      - id: inspect
+        title: Inspect module
+        prompt: Inspect src/module_a/service.py and repair the defect.
+steps:
+  - id: intake
+    title: Intake
+    mode: sequential
+    nodes:
+      - intake
+""",
+        encoding="utf-8",
+    )
+    module_dir = tmp_path / "src" / "module_a"
+    module_dir.mkdir(parents=True)
+    (module_dir / "service.py").write_text("print('hello')\n", encoding="utf-8")
+    settings = _settings(tmp_path, workflows_root)
+    OrchestrationSettingsStore(settings.borg_root).save(
+        agent_selection=AgentSelectionSettings(agent_system="local_model", agent_name="borg-cpu"),
+        local_model=LocalModelSettings(model_name="borg-cpu"),
+    )
+    client = FakeSupabaseClient(
+        {
+            "tasks": [
+                {
+                    "id": "t1",
+                    "title": "Repair module_a service",
+                    "description": "Inspect src/module_a/service.py and continue.",
+                    "status": "queued",
+                    "workflow_id": "demo",
+                    "assigned_agent": "local-llm",
+                    "project_id": "project-1",
+                    "local_path": str(tmp_path),
+                }
+            ],
+            "task_events": [],
+            "artifacts": [],
+            "project_specs": [],
+        }
+    )
+
+    class MissingCubeClaudeClient(FakeClaudeCodeClient):
+        def __init__(self) -> None:
+            super().__init__(project_root=str(tmp_path))
+
+        def send_prompt(self, prompt: str) -> dict[str, object]:
+            self.prompts.append(prompt)
+            return {
+                "content": json.dumps(
+                    {
+                        "first_node_id": "intake",
+                        "summary": "No borg-cube.md was found for src/module_a/service.py.",
+                    }
+                ),
+                "response": {"result": "No borg-cube.md was found."},
+                "command": ["claude", "-p", "<prompt>", "--model", "borg-cpu"],
+                "stderr": "",
+            }
+
+    worker = AgentWorker(
+        task_repository=TaskRepository(client),  # type: ignore[arg-type]
+        artifact_repository=ArtifactRepository(client),  # type: ignore[arg-type]
+        settings=settings,
+        claude_code_client=MissingCubeClaudeClient(),
+    )
+
+    worker.process_next_batch()
+
+    created_event = next(event for event in client.tables["task_events"] if event["event_type"] == "workcube_auto_created")
+    assert created_event["payload"]["workcube_missing_detected"] is True
+    assert created_event["payload"]["workcube_created"] is True
+    assert created_event["payload"]["workcube_path"] == "src/module_a/borg-cube.md"
+    assert "closest relevant work area" in created_event["payload"]["workcube_creation_reason"]
+    assert (module_dir / "borg-cube.md").exists()
+    assert client.tables["project_specs"][0]["spec_path"] == "src/module_a/borg-cube.md"
+    completed_event = next(
+        event for event in client.tables["task_events"] if event["event_type"] == "llm_processing_completed"
+    )
+    assert completed_event["payload"]["workcube_missing_detected"] is True
+    assert "Automatic analysis:" in completed_event["payload"]["human_review_text"]
+    assert "Path: src/module_a/borg-cube.md" in completed_event["payload"]["human_review_text"]
 
 
 def test_worker_prefers_worktree_path_for_claude_workspace(tmp_path: Path, monkeypatch) -> None:

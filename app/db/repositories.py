@@ -8,6 +8,7 @@ from app.db.supabase_client import SupabaseRestError
 from app.models.borg import BorgSkill, BorgUnit
 from app.models.knowledge import CodeExampleCreate, KnowledgeEntryCreate, RuleCreate
 from app.models.projects import ProjectCreate
+from app.models.issues import IssueCreate, IssueStatus
 from app.models.tasks import TaskCreate, TaskStatus
 
 
@@ -448,3 +449,53 @@ class McpAuditRepository:
         if success in {"true", "false"}:
             query["success"] = f"eq.{success}"
         return self.client.request("GET", "mcp_access_logs", query=query)
+
+
+class IssueRepository:
+    def __init__(self, client: SupabaseRestClient) -> None:
+        self.client = client
+
+    def list_issues(self, project_id: str | None = None) -> list[dict[str, Any]]:
+        query: dict[str, str] = {
+            "select": "*",
+            "order": "updated_at.desc,created_at.desc",
+        }
+        if project_id:
+            query["project_id"] = f"eq.{project_id}"
+        return self.client.request("GET", "issues", query=query)
+
+    def get_issue(self, issue_id: str) -> dict[str, Any] | None:
+        rows = self.client.request(
+            "GET",
+            "issues",
+            query={"select": "*", "id": f"eq.{issue_id}", "limit": "1"},
+        )
+        return rows[0] if rows else None
+
+    def create_issue(self, issue: IssueCreate) -> dict[str, Any]:
+        return self.client.request(
+            "POST",
+            "issues",
+            query={"select": "*"},
+            body=issue.model_dump(exclude_none=True),
+            prefer="return=representation",
+        )[0]
+
+    def update_status(self, issue_id: str, new_status: IssueStatus) -> dict[str, Any] | None:
+        rows = self.client.request(
+            "PATCH",
+            "issues",
+            query={"select": "*", "id": f"eq.{issue_id}"},
+            body={"status": new_status},
+            prefer="return=representation",
+        )
+        return rows[0] if rows else None
+
+    def delete_issue(self, issue_id: str) -> bool:
+        self.client.request(
+            "DELETE",
+            "issues",
+            query={"id": f"eq.{issue_id}"},
+            prefer="return=minimal",
+        )
+        return True

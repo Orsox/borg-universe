@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 from fastapi.testclient import TestClient
 
@@ -380,6 +381,8 @@ def test_projects_overview_detects_nested_claude_assets(monkeypatch, tmp_path: P
 
     assert page.status_code == 200
     assert page.text.count('title="Present in .claude"') == 2
+    assert re.search(r'name="agent_names" value="borg-queen-architect"[^>]*checked', page.text)
+    assert re.search(r'name="skill_names" value="borg-collective"[^>]*checked', page.text)
 
 
 def test_bind_project_copies_selected_agents_and_skills_into_nested_claude_dirs(monkeypatch, tmp_path: Path) -> None:
@@ -1113,7 +1116,9 @@ def test_create_task_form_queues_local_llm_workflow_with_project_defaults(monkey
         }
     )
     settings = _test_settings(tmp_path, workflows_root=workflows_root)
+    started_task_ids: list[str] = []
     monkeypatch.setattr(tasks_module, "SupabaseRestClient", lambda _settings: fake_client)
+    monkeypatch.setattr(tasks_module, "_schedule_task_processing", lambda _bg, _settings, task_id: started_task_ids.append(task_id))
     client = TestClient(create_app())
     client.app.dependency_overrides[get_settings] = lambda: settings
 
@@ -1144,6 +1149,7 @@ def test_create_task_form_queues_local_llm_workflow_with_project_defaults(monkey
     assert task["pycharm_mcp_enabled"] is True
     assert task["topic"] == "MCP"
     assert any(event["event_type"] == "workflow_selected" for event in fake_client.tables["task_events"])
+    assert started_task_ids == [task["id"]]
 
 
 def test_tasks_page_falls_back_when_projects_table_is_unavailable(monkeypatch) -> None:
@@ -1228,7 +1234,9 @@ def test_task_review_confirm_requeues_task(monkeypatch) -> None:
             "projects": [],
         }
     )
+    started_task_ids: list[str] = []
     monkeypatch.setattr(tasks_module, "SupabaseRestClient", lambda _settings: fake_client)
+    monkeypatch.setattr(tasks_module, "_schedule_task_processing", lambda _bg, _settings, task_id: started_task_ids.append(task_id))
     client = TestClient(create_app())
 
     response = client.post(
@@ -1247,10 +1255,35 @@ def test_task_review_confirm_requeues_task(monkeypatch) -> None:
     assert response.headers["location"] == "/tasks/t1"
     assert fake_client.tables["tasks"][0]["status"] == "queued"
     assert fake_client.tables["tasks"][0]["pycharm_mcp_enabled"] is True
+    assert fake_client.tables["tasks"][0]["human_review_input"] == "Looks good."
     event_types = [event["event_type"] for event in fake_client.tables["task_events"]]
     assert "review_confirmed" in event_types
     assert "workflow_resumed" in event_types
     assert "task_queued" in event_types
+    assert started_task_ids == ["t1"]
+
+
+def test_task_status_form_queue_starts_processing(monkeypatch) -> None:
+    fake_client = FakeSupabaseClient(
+        {
+            "tasks": [{"id": "t1", "title": "Task", "status": "draft"}],
+            "task_events": [],
+        }
+    )
+    started_task_ids: list[str] = []
+    monkeypatch.setattr(tasks_module, "SupabaseRestClient", lambda _settings: fake_client)
+    monkeypatch.setattr(tasks_module, "_schedule_task_processing", lambda _bg, _settings, task_id: started_task_ids.append(task_id))
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/tasks/t1/status",
+        data={"status": "queued"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert fake_client.tables["tasks"][0]["status"] == "queued"
+    assert started_task_ids == ["t1"]
 
 
 def test_task_review_confirm_resumes_next_unfinished_workflow_level(monkeypatch, tmp_path) -> None:
@@ -1376,7 +1409,7 @@ def test_task_review_start_implementation_resumes_trigger_stage(monkeypatch, tmp
 
     page = client.get("/tasks/t1/review")
     assert page.status_code == 200
-    assert "Start implementation" in page.text
+    assert "Implementierung starten" in page.text
     assert "Trigger implementation task execution" in page.text
 
     response = client.post(
@@ -1548,6 +1581,92 @@ def test_task_review_page_shows_worker_context_without_llm_output(monkeypatch) -
     assert "LLM output for review" in response.text
 
 
+def test_task_detail_shows_workcube_analysis_and_human_review_input(monkeypatch) -> None:
+    fake_client = FakeSupabaseClient(
+        {
+            "tasks": [
+                {
+                    "id": "t1",
+                    "title": "Task",
+                    "status": "review_required",
+                    "description": "Needs review",
+                    "human_review_input": "Bitte bei docs gegenpruefen.",
+                }
+            ],
+            "task_events": [
+                {
+                    "id": "e1",
+                    "task_id": "t1",
+                    "event_type": "workcube_auto_created",
+                    "message": "Missing borg-cube.md was detected and a new file was created automatically.",
+                    "payload": {
+                        "workcube_missing_detected": True,
+                        "workcube_created": True,
+                        "workcube_path": "docs/borg-cube.md",
+                        "workcube_creation_reason": "A nearby documentation folder `docs` already exists, so the file was placed there.",
+                    },
+                    "created_at": "2026-04-12T08:00:00+00:00",
+                }
+            ],
+            "artifacts": [],
+            "projects": [],
+        }
+    )
+    monkeypatch.setattr(tasks_module, "SupabaseRestClient", lambda _settings: fake_client)
+    client = TestClient(create_app())
+
+    response = client.get("/tasks/t1")
+
+    assert response.status_code == 200
+    assert "Automatische Analyse" in response.text
+    assert "docs/borg-cube.md" in response.text
+    assert "Menschliches Review und Einschaetzung" in response.text
+    assert "Bitte bei docs gegenpruefen." in response.text
+
+
+def test_task_review_page_shows_workcube_analysis_and_saved_review(monkeypatch) -> None:
+    fake_client = FakeSupabaseClient(
+        {
+            "tasks": [
+                {
+                    "id": "t1",
+                    "title": "Task",
+                    "status": "review_required",
+                    "description": "Needs review",
+                    "human_review_input": "Bitte Modulgrenzen pruefen.",
+                }
+            ],
+            "task_events": [
+                {
+                    "id": "e1",
+                    "task_id": "t1",
+                    "event_type": "workcube_auto_created",
+                    "message": "Missing borg-cube.md was detected and a new file was created automatically.",
+                    "payload": {
+                        "workcube_missing_detected": True,
+                        "workcube_created": True,
+                        "workcube_path": "src/core/borg-cube.md",
+                        "workcube_creation_reason": "The task references the existing directory `src/core`, so that directory was treated as the owning area.",
+                    },
+                    "created_at": "2026-04-12T08:00:00+00:00",
+                }
+            ],
+            "artifacts": [],
+            "projects": [],
+        }
+    )
+    monkeypatch.setattr(tasks_module, "SupabaseRestClient", lambda _settings: fake_client)
+    client = TestClient(create_app())
+
+    response = client.get("/tasks/t1/review")
+
+    assert response.status_code == 200
+    assert "Automatische Analyse" in response.text
+    assert "src/core/borg-cube.md" in response.text
+    assert "Menschliches Review und Einschaetzung" in response.text
+    assert "Bitte Modulgrenzen pruefen." in response.text
+
+
 def test_task_detail_shows_needs_input_guidance_and_cta(monkeypatch) -> None:
     fake_client = FakeSupabaseClient(
         {
@@ -1603,7 +1722,7 @@ def test_task_review_page_allows_needs_input_and_shows_guidance(monkeypatch) -> 
     assert response.status_code == 200
     assert "Human input required" in response.text
     assert "Project context is incomplete" in response.text
-    assert "Confirm and continue" in response.text
+    assert "Review absenden und fortsetzen" in response.text
 
 
 def test_api_routes_keep_json_errors_for_configuration_errors(monkeypatch) -> None:

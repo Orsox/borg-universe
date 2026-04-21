@@ -141,6 +141,7 @@ create table if not exists public.tasks (
   requested_by text,
   assigned_agent text,
   assigned_skill text,
+  human_review_input text not null default '',
   sequence_index integer not null default 0,
   workspace_metadata jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
@@ -164,6 +165,9 @@ add column if not exists pycharm_mcp_enabled boolean not null default false;
 
 alter table public.tasks
 add column if not exists workspace_metadata jsonb not null default '{}'::jsonb;
+
+alter table public.tasks
+add column if not exists human_review_input text not null default '';
 
 create table if not exists public.task_events (
   id uuid primary key default extensions.gen_random_uuid(),

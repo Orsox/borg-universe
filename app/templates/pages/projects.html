@@ -158,7 +158,7 @@
                 <label class="unit-item">
                   <input type="checkbox" name="agent_names" value="{{ agent.name }}" 
                          class="unit-checkbox-agent-{{ project.id }}"
-                         {% if project.bound_agents and agent.name in project.bound_agents %}checked{% endif %}>
+                         {% if (project.bound_agents and agent.name in project.bound_agents) or (project.local_agents and agent.name in project.local_agents) %}checked{% endif %}>
                   <div>
                     <strong>{{ agent.name }}</strong>
                     {% if project.local_agents and agent.name in project.local_agents %}
@@ -189,7 +189,7 @@
                 <label class="unit-item">
                   <input type="checkbox" name="skill_names" value="{{ skill.name }}" 
                          class="unit-checkbox-skill-{{ project.id }}"
-                         {% if project.bound_skills and skill.name in project.bound_skills %}checked{% endif %}>
+                         {% if (project.bound_skills and skill.name in project.bound_skills) or (project.local_skills and skill.name in project.local_skills) %}checked{% endif %}>
                   <div>
                     <strong>{{ skill.name }}</strong>
                     {% if project.local_skills and skill.name in project.local_skills %}

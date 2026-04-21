@@ -833,10 +833,22 @@ class AgentWorker:
         stored_specs = []
         materialized_specs: list[str] = []
         materialized_project_files: list[str] = []
+        workcube_context: dict[str, Any] | None = None
         if phase in {"planning", "review_resume"}:
             extracted_specs = self._extract_borg_cube_specs(task, parsed, output)
             stored_specs = self._store_borg_cube_specs(task, extracted_specs)
             materialized_specs = self._maybe_materialize_borg_cube_specs(task, assets, extracted_specs or stored_specs, parsed)
+            workcube_context, auto_specs, auto_paths = self._ensure_workcube_exists(
+                task=task,
+                assets=assets,
+                parsed=parsed,
+                output=output,
+                extracted_specs=extracted_specs,
+            )
+            if auto_specs:
+                stored_specs.extend(auto_specs)
+            if auto_paths:
+                materialized_specs.extend(auto_paths)
             materialized_project_files = self._maybe_materialize_project_files(task, assets, parsed)
             self._validate_new_borg_cube_project_completion(task, assets, extracted_specs, materialized_specs)
         created_tasks = self._store_implementation_tasks(task, parsed) if phase == "planning" else []
@@ -853,6 +865,8 @@ class AgentWorker:
             "materialized_project_file_count": len(materialized_project_files),
             "workspace_metadata": stored_workspace_metadata,
         }
+        if workcube_context:
+            plan["workcube_context"] = workcube_context
         if resume_context:
             plan["resume_stage_index"] = int(resume_context.get("resume_stage_index", 1))
 
@@ -870,6 +884,7 @@ class AgentWorker:
                 "command": result.get("command"),
                 "stderr": result.get("stderr"),
                 "workspace_metadata": stored_workspace_metadata,
+                "workcube_context": workcube_context or {},
             },
         )
         if stored_specs:
@@ -936,9 +951,10 @@ class AgentWorker:
                 "summary": summary,
                 "first_node_id": plan["first_node_id"],
                 "resume_stage_index": plan.get("resume_stage_index"),
-                "human_review_text": self._render_llm_human_review_text(plan),
+                "human_review_text": self._render_llm_human_review_text(plan, workcube_context),
                 "provider": "claude_code",
                 "workspace_metadata": stored_workspace_metadata,
+                **(workcube_context or {}),
             },
         )
         return plan
@@ -1020,6 +1036,7 @@ class AgentWorker:
             "The project spec path is borg-cube.md and must list the module specs underneath it.",
             "Each module spec path ends with borg-cube.md and briefly explains that module's available capabilities.",
             "Store specs in the project database by default. Set materialize_borg_cube_files true only when the user explicitly requests files or when workflow_id is new_borg_cube_project.",
+            "If no relevant borg-cube.md exists after repository inspection, create a minimal borg_cube_specs entry, materialize it, and explain the chosen location in the summary.",
             "For workflow_id new_borg_cube_project, also return project_files for a minimal runnable scaffold when the target project is empty or missing core project files.",
             "project_files must be a list of objects with path and content. Use relative paths only and include only safe text files required for the base scaffold.",
             "implementation_tasks must be small, focused work items. Every implementation prompt must start with <nano-implant>.",
@@ -1049,6 +1066,7 @@ class AgentWorker:
                 lines.append("Previous output:")
                 lines.append(review_context["output"])
         lines.extend(self._claude_workflow_context_lines(task))
+        lines.extend(self._workflow_specific_prompt_lines(task))
         return "\n".join(lines)
 
     def _pycharm_mcp_config_json(self, task: dict[str, Any]) -> str | None:
@@ -1472,6 +1490,224 @@ class AgentWorker:
             written.append(str(target))
         return written
 
+    def _ensure_workcube_exists(
+        self,
+        *,
+        task: dict[str, Any],
+        assets: dict[str, Any],
+        parsed: dict[str, Any],
+        output: str,
+        extracted_specs: list[dict[str, Any]],
+    ) -> tuple[dict[str, Any] | None, list[dict[str, Any]], list[str]]:
+        if not self._workflow_allows_workcube_creation(task):
+            return None, [], []
+
+        project_root = Path(str(assets.get("project_root") or self._task_project_root(task) or self.settings.borg_root))
+        existing_paths = self._existing_workcube_paths(task, project_root)
+        missing_detected = self._workcube_missing_detected(parsed, output, extracted_specs, existing_paths)
+        if not missing_detected:
+            return None, [], []
+
+        target_path, reason = self._select_workcube_target_path(task, project_root)
+        spec_path = _relative_workcube_spec_path(project_root, target_path)
+        if not spec_path:
+            context = {
+                "workcube_missing_detected": True,
+                "workcube_created": False,
+                "workcube_path": str(target_path),
+                "workcube_creation_reason": reason,
+                "workcube_creation_error": "Could not derive a safe relative path for borg-cube.md.",
+            }
+            self.task_repository.add_event(
+                task["id"],
+                "workcube_auto_creation_failed",
+                "Missing borg-cube.md was detected, but the automatic creation target was invalid.",
+                context,
+            )
+            return context, [], []
+
+        spec = self._build_minimal_workcube_spec(task, spec_path, reason)
+        try:
+            stored = self._store_borg_cube_specs(task, [spec])
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_text(spec["content"], encoding="utf-8")
+        except Exception as exc:
+            context = {
+                "workcube_missing_detected": True,
+                "workcube_created": False,
+                "workcube_path": spec_path,
+                "workcube_creation_reason": reason,
+                "workcube_creation_error": str(exc),
+            }
+            self.task_repository.add_event(
+                task["id"],
+                "workcube_auto_creation_failed",
+                "Missing borg-cube.md was detected, but automatic creation failed.",
+                context,
+            )
+            return context, [], []
+
+        context = {
+            "workcube_missing_detected": True,
+            "workcube_created": True,
+            "workcube_path": spec_path,
+            "workcube_creation_reason": reason,
+        }
+        self.task_repository.add_event(
+            task["id"],
+            "workcube_auto_created",
+            "Missing borg-cube.md was detected and a new file was created automatically.",
+            context,
+        )
+        return context, stored, [str(target_path)]
+
+    def _workflow_allows_workcube_creation(self, task: dict[str, Any]) -> bool:
+        workflow_id = str(task.get("workflow_id") or "").strip()
+        return workflow_id not in {"new_workflow_harness"}
+
+    def _existing_workcube_paths(self, task: dict[str, Any], project_root: Path) -> list[str]:
+        paths: set[str] = set()
+        if project_root.exists():
+            ignored = {".git", ".claude", ".idea", ".venv", "venv", "__pycache__"}
+            for candidate in project_root.rglob("borg-cube.md"):
+                relative_parts = candidate.relative_to(project_root).parts
+                if any(part in ignored for part in relative_parts):
+                    continue
+                paths.add(str(candidate.relative_to(project_root)).replace("\\", "/"))
+        project_id = _clean_text(task.get("project_id"))
+        client = getattr(self.task_repository, "client", None)
+        if project_id and client is not None and hasattr(client, "request"):
+            try:
+                for spec in ProjectSpecRepository(client).list_for_project(project_id):
+                    normalized = _normalize_spec_path(spec.get("spec_path"))
+                    if normalized:
+                        paths.add(normalized)
+            except Exception:
+                pass
+        return sorted(paths)
+
+    def _workcube_missing_detected(
+        self,
+        parsed: dict[str, Any],
+        output: str,
+        extracted_specs: list[dict[str, Any]],
+        existing_paths: list[str],
+    ) -> bool:
+        if extracted_specs or existing_paths:
+            return False
+        if parsed.get("workcube_missing_detected") is True or parsed.get("borg_cube_missing") is True:
+            return True
+        text = " ".join(
+            str(value or "")
+            for value in (
+                parsed.get("summary"),
+                parsed.get("verification"),
+                output,
+            )
+        ).lower()
+        indicators = (
+            "no borg-cube.md",
+            "missing borg-cube.md",
+            "no matching borg-cube.md exists",
+            "no cube files identified",
+            "borg cube missing",
+        )
+        return any(indicator in text for indicator in indicators)
+
+    def _select_workcube_target_path(self, task: dict[str, Any], project_root: Path) -> tuple[Path, str]:
+        # Prefer an explicitly referenced module or file area, then nearby docs/spec folders, then the workspace root.
+        focus_dir, focus_reason = self._infer_workcube_focus_directory(task, project_root)
+        search_roots = [focus_dir] if focus_dir is not None else []
+        if project_root not in search_roots:
+            search_roots.append(project_root)
+        for root in search_roots:
+            for folder_name in ("docs", "doc", "documentation", "spec", "specs", "design", "architecture"):
+                candidate = root / folder_name
+                if candidate.exists() and candidate.is_dir():
+                    return candidate / "borg-cube.md", f"{focus_reason} A nearby documentation folder `{candidate.relative_to(project_root)}` already exists, so the file was placed there."
+        if focus_dir is not None:
+            return focus_dir / "borg-cube.md", f"{focus_reason} No dedicated documentation folder was available, so the file was placed in the closest relevant work area."
+        return project_root / "borg-cube.md", "No more specific module or documentation directory could be inferred reliably, so the file was placed at the workspace root."
+
+    def _infer_workcube_focus_directory(self, task: dict[str, Any], project_root: Path) -> tuple[Path | None, str]:
+        task_text = "\n".join(
+            str(value or "")
+            for value in (task.get("title"), task.get("description"), task.get("topic"))
+        )
+        candidates = re.findall(r"(?<![A-Za-z0-9_.-])([A-Za-z0-9_./\\-]+(?:\.[A-Za-z0-9_]+)?)", task_text)
+        for raw_candidate in candidates:
+            normalized = raw_candidate.strip().strip("`").replace("\\", "/").strip("/")
+            if not normalized or normalized in {"borg-cube.md", ".", ".."}:
+                continue
+            candidate_path = project_root / normalized
+            try:
+                resolved = candidate_path.resolve()
+            except Exception:
+                continue
+            try:
+                resolved.relative_to(project_root.resolve())
+            except Exception:
+                continue
+            if resolved.exists():
+                if resolved.is_file():
+                    relative = resolved.relative_to(project_root).as_posix()
+                    return resolved.parent, f"The task references `{relative}`, so the new borg-cube.md belongs with that area."
+                relative = resolved.relative_to(project_root).as_posix()
+                return resolved, f"The task references the existing directory `{relative}`, so that directory was treated as the owning area."
+
+        for source_root_name in ("src", "app", "lib", "services"):
+            source_root = project_root / source_root_name
+            if not source_root.exists() or not source_root.is_dir():
+                continue
+            child_dirs = [child for child in source_root.iterdir() if child.is_dir() and not child.name.startswith(".")]
+            if len(child_dirs) == 1:
+                relative = child_dirs[0].relative_to(project_root).as_posix()
+                return child_dirs[0], f"The workspace has a single primary source area at `{relative}`, so that directory was selected as the nearest module context."
+
+        return None, "The task text does not point to a specific module directory."
+
+    def _build_minimal_workcube_spec(
+        self,
+        task: dict[str, Any],
+        spec_path: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        project_id = str(task.get("project_id") or "local")
+        title = _clean_text(task.get("title")) or _title_from_spec_path(spec_path)
+        task_description = _clean_text(task.get("description")) or "No task description was provided."
+        workflow_id = _clean_text(task.get("workflow_id")) or "none"
+        local_path = _clean_text(task.get("local_path")) or "unknown"
+        content = "\n".join(
+            [
+                f"# {title}",
+                "",
+                "## Kontext",
+                f"- Automatisch erstellt, weil keine passende `borg-cube.md` gefunden wurde.",
+                f"- Workflow: {workflow_id}",
+                f"- Task: {title}",
+                f"- Arbeitsverzeichnis: {local_path}",
+                "",
+                "## Zweck",
+                "Diese Datei bietet einen minimalen Startpunkt fuer die weitere Spezifikation dieses Bereichs.",
+                "",
+                "## Relevante Informationen",
+                f"- Ausgangslage: {task_description}",
+                f"- Platzierungsentscheidung: {reason}",
+                "- Offene Punkte: Ergaenzen Sie Anforderungen, Grenzen, Schnittstellen und Risiken.",
+                "",
+            ]
+        )
+        return {
+            "project_id": project_id,
+            "spec_path": spec_path,
+            "spec_type": _spec_type(None, spec_path),
+            "module_name": None if spec_path == "borg-cube.md" else Path(spec_path).parent.name,
+            "title": _title_from_spec_path(spec_path),
+            "summary": "Automatically created because no relevant borg-cube.md existed.",
+            "content": content.rstrip() + "\n",
+            "source": "auto_workcube",
+        }
+
     def _store_implementation_tasks(self, parent_task: dict[str, Any], parsed: dict[str, Any]) -> list[dict[str, Any]]:
         raw_tasks = parsed.get("implementation_tasks") or parsed.get("tasks")
         if not isinstance(raw_tasks, list):
@@ -1629,7 +1865,22 @@ class AgentWorker:
                 lines.append(review_context["output"])
         else:
             lines.append("Human review context: none recorded.")
+        lines.extend(self._workflow_specific_prompt_lines(task))
         return "\n".join(lines)
+
+    def _workflow_specific_prompt_lines(self, task: dict[str, Any]) -> list[str]:
+        workflow_id = str(task.get("workflow_id") or "").strip()
+        if workflow_id != "borg-nanoprobe-repair":
+            return []
+        return [
+            "Nanoprobe repair spec rules:",
+            "- Before claiming that no borg-cube.md is relevant, search the repository for the nearest matching borg-cube.md and inspect the affected code area.",
+            "- If no matching borg-cube.md exists, infer the owning module from source files, tests, entry points, and nearby documentation.",
+            "- When that ownership decision is high confidence, return a borg_cube_specs entry for the correct new or updated borg-cube.md and set materialize_borg_cube_files true.",
+            "- State clearly in the review summary when borg-cube.md was missing, where a new file was created, and why that location was chosen.",
+            "- When confidence is not high enough for a safe cube change, create a small implementation_tasks follow-up with explicit search targets and decision criteria.",
+            "- In the summary, state which directories or files were inspected and why the chosen cube location is correct.",
+        ]
 
     def _latest_review_context(self, events: list[dict[str, Any]]) -> dict[str, str] | None:
         latest: dict[str, str] = {}
@@ -2297,8 +2548,27 @@ class AgentWorker:
             f"and {task_count} related tasks."
         )
 
-    def _render_llm_human_review_text(self, plan: dict[str, Any]) -> str:
+    def _render_llm_human_review_text(
+        self,
+        plan: dict[str, Any],
+        workcube_context: dict[str, Any] | None = None,
+    ) -> str:
         lines: list[str] = []
+        if workcube_context and workcube_context.get("workcube_missing_detected"):
+            lines.extend(
+                [
+                    "Automatic analysis:",
+                    "- Missing borg-cube.md detected: yes",
+                    f"- borg-cube.md created: {'yes' if workcube_context.get('workcube_created') else 'no'}",
+                ]
+            )
+            if workcube_context.get("workcube_path"):
+                lines.append(f"- Path: {workcube_context['workcube_path']}")
+            if workcube_context.get("workcube_creation_reason"):
+                lines.append(f"- Reason: {workcube_context['workcube_creation_reason']}")
+            if workcube_context.get("workcube_creation_error"):
+                lines.append(f"- Error: {workcube_context['workcube_creation_error']}")
+            lines.append("")
         for iteration in plan.get("iterations", []):
             if not isinstance(iteration, dict):
                 continue
@@ -2527,6 +2797,17 @@ def _normalize_project_file_path(value: Any) -> str | None:
     if any(part in blocked_parts for part in Path(normalized).parts):
         return None
     return normalized
+
+
+def _relative_workcube_spec_path(project_root: Path, target_path: Path) -> str | None:
+    try:
+        relative = target_path.resolve().relative_to(project_root.resolve())
+    except Exception:
+        try:
+            relative = target_path.relative_to(project_root)
+        except Exception:
+            return None
+    return _normalize_spec_path(str(relative).replace("\\", "/"))
 
 
 def _borg_cube_quality_errors(content: str) -> list[str]:

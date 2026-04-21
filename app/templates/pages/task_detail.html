@@ -10,7 +10,7 @@
 <a class="button" href="/tasks/{{ task.id }}/workflow">View Workflow</a>
 {% endif %}
 {% if task.status in ["review_required", "needs_input"] %}
-<a class="button" href="/tasks/{{ task.id }}/review">{{ "Provide input" if task.status == "needs_input" else "Review task" }}</a>
+<a class="button" href="/tasks/{{ task.id }}/review">{{ "Eingabe erfassen" if task.status == "needs_input" else "Task pruefen" }}</a>
 {% endif %}
 <form class="inline-form" method="post" action="/tasks/{{ task.id }}/queue"><button type="submit">Queue</button></form>
 <form class="inline-form" method="post" action="/tasks/{{ task.id }}/mock-agent-run"><button type="submit" class="secondary">Mock-Agent</button></form>

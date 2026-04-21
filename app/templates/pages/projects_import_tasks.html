@@ -1,0 +1,67 @@
+{% extends "ui_template.html" %}
+
+{% block title %}Create Tasks for Imported Projects - Borg Universe{% endblock %}
+{% block eyebrow %}Projects{% endblock %}
+{% block heading %}Create Tasks{% endblock %}
+{% block summary %}Configure a new task for each project you just imported. Select a workflow and provide common details.{% endblock %}
+
+{% block page_actions %}
+<a class="button secondary" href="/projects">Skip to Projects</a>
+{% endblock %}
+
+{% block content %}
+<section class="section panel">
+  <div class="panel-header">
+    <h2>Task Configuration</h2>
+    <span class="badge">{{ projects|length }} projects</span>
+  </div>
+  <div class="panel-body">
+    <form method="post" action="/projects/import/tasks">
+      {% for project in projects %}
+      <div class="project-task-card" style="border: 1px solid #eee; padding: 15px; margin-bottom: 20px; border-radius: 8px; background: #fafafa;">
+        <h3 style="margin-top: 0;">{{ project.name }}</h3>
+        <input type="hidden" name="project_ids" value="{{ project.id }}">
+        
+        <div class="form-grid">
+          <label class="full">Task Title
+            <input name="title_{{ project.id }}" required maxlength="200" value="Initial Setup: {{ project.name }}" placeholder="Task title">
+          </label>
+          <label class="full">Workflow
+            <select name="workflow_id_{{ project.id }}" required>
+              <option value="">-- Select a workflow --</option>
+              {% for workflow in workflows %}
+              <option value="{{ workflow.id }}">
+                {{ workflow.title }}
+              </option>
+              {% endfor %}
+            </select>
+          </label>
+          <label class="full">Description
+            <textarea name="description_{{ project.id }}" rows="2" placeholder="Task description for this specific project"></textarea>
+          </label>
+          
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;" class="full">
+            <label>Platform
+              <input name="platform_{{ project.id }}" value="{{ project.default_platform or '' }}" placeholder="e.g. stm32, nordic, pc">
+            </label>
+            <label>MCU
+              <input name="mcu_{{ project.id }}" value="{{ project.default_mcu or '' }}" placeholder="e.g. F401RE, nRF52840">
+            </label>
+            <label>Board
+              <input name="board_{{ project.id }}" value="{{ project.default_board or '' }}" placeholder="e.g. Nucleo-F401RE">
+            </label>
+            <label>Topic
+              <input name="topic_{{ project.id }}" value="{{ project.default_topic or '' }}" placeholder="e.g. sensor-data, control-logic">
+            </label>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+
+      <div class="actions">
+        <button type="submit">Create Tasks and Finish</button>
+      </div>
+    </form>
+  </div>
+</section>
+{% endblock %}

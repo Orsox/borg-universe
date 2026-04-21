@@ -3,7 +3,7 @@
 {% block title %}Review {{ task.title }} - Borg Universe{% endblock %}
 {% block eyebrow %}Review{% endblock %}
 {% block heading %}{{ task.title }}{% endblock %}
-{% block summary %}{{ "Provide the missing human input, then continue the workflow." if task.status == "needs_input" else "Review, modify, or confirm the task so the workflow chain can continue." }}{% endblock %}
+{% block summary %}{{ "Fehlende menschliche Eingabe erfassen und danach den Workflow fortsetzen." if task.status == "needs_input" else "Automatische Analyse pruefen, menschliches Review erfassen und den Workflow fortsetzen." }}{% endblock %}
 {% block page_actions %}
 <a class="button secondary" href="/tasks/{{ task.id }}">Back to task</a>
 {% endblock %}
@@ -13,10 +13,41 @@
   <div>
     <section class="section panel">
       <div class="panel-header">
-        <h2>Review task</h2>
+        <h2>Task-Review</h2>
         <span class="badge {{ task.status|badge_class }}">{{ task.status }}</span>
       </div>
       <div class="panel-body">
+        {% if workcube_context %}
+        <div class="callout">
+          <strong>Automatische Analyse</strong>
+          <p class="muted">{{ workcube_context.created_at }} · {{ workcube_context.event_type }}</p>
+          <p>
+            {% if workcube_context.missing_detected %}
+            Fehlende `borg-cube.md` erkannt.
+            {% endif %}
+            {% if workcube_context.created %}
+            Es wurde automatisch eine neue `borg-cube.md` angelegt.
+            {% else %}
+            Es konnte keine neue `borg-cube.md` angelegt werden.
+            {% endif %}
+          </p>
+          {% if workcube_context.path %}
+          <label>Pfad
+            <textarea readonly rows="2">{{ workcube_context.path }}</textarea>
+          </label>
+          {% endif %}
+          {% if workcube_context.reason %}
+          <label>Begruendung
+            <textarea readonly rows="4">{{ workcube_context.reason }}</textarea>
+          </label>
+          {% endif %}
+          {% if workcube_context.error %}
+          <label>Fehler
+            <textarea readonly rows="4">{{ workcube_context.error }}</textarea>
+          </label>
+          {% endif %}
+        </div>
+        {% endif %}
         {% if needs_input_guidance %}
         <div class="callout warning">
           <strong>{{ needs_input_guidance.title }}</strong>
@@ -80,7 +111,7 @@
         </div>
         <form method="post" action="/tasks/{{ task.id }}/review">
           <div class="form-grid">
-            <label>Action
+            <label>Aktion
               <select name="review_action">
                 {% for action in review_actions %}
                 <option value="{{ action.value }}">{{ action.label }}</option>
@@ -88,7 +119,7 @@
               </select>
             </label>
             {% if workflow_stage_options %}
-            <label>Next workflow stage
+            <label>Naechste Workflow-Stufe
               <select name="resume_stage_index">
                 {% for stage in workflow_stage_options %}
                 <option value="{{ stage.index }}" {% if stage.index == suggested_resume_stage_index %}selected{% endif %}>{{ stage.index + 1 }}. {{ stage.title }}</option>
@@ -112,15 +143,15 @@
               <input type="checkbox" name="pycharm_mcp_enabled" {% if task.pycharm_mcp_enabled %}checked{% endif %}>
               <span>PyCharm MCP</span>
             </label>
-            <label class="full">Review notes
-              <textarea name="review_notes" rows="4" placeholder="Document the review result, requested changes, or approval notes"></textarea>
+            <label class="full">Menschliches Review und Einschaetzung
+              <textarea name="review_notes" rows="6" placeholder="Diese Eingabe wird gespeichert, im Task sichtbar gehalten und als zusaetzlicher Kontext an die naechsten Agenten weitergegeben.">{{ human_review_input or '' }}</textarea>
             </label>
           </div>
           <div class="actions">
-            <button type="submit">Save review</button>
-            <button type="submit" name="action" value="confirm">Confirm and continue</button>
-            <button type="submit" name="action" value="start_implementation">Start implementation</button>
-            <button type="submit" class="secondary" name="action" value="request_changes">Request changes</button>
+            <button type="submit">Review speichern</button>
+            <button type="submit" name="action" value="confirm">Review absenden und fortsetzen</button>
+            <button type="submit" name="action" value="start_implementation">Implementierung starten</button>
+            <button type="submit" class="secondary" name="action" value="request_changes">Aenderungen anfordern</button>
           </div>
         </form>
       </div>
