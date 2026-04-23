@@ -11,6 +11,9 @@
 | **borg-queen-architect** | Entwirft Architektur & Modulstruktur auf Basis einer `borg-cube.md` — bevor Implementierung beginnt |
 | **borg-disassembler** | Zerlegt ein Feature-Spec in ein strukturiertes, ausführbares Task-Backlog für nachgelagerte Agenten |
 | **borg-git-orchestrator** | Verwaltet Branches, Worktrees und Workspace-Lifecycle für Claude Code Workflows |
+| **borg-intake-drone** | Normalisiert unscharfe Feature-Ideen zu kompakten Feature-Definitionen |
+| **borg-impact-drone** | Analysiert betroffene Module, APIs, UI-Bereiche, Datenmodelle, Tests und Risiken |
+| **borg-planning-drone** | Erstellt Delivery-Pläne mit kleinen, dependency-aware Work Packages |
 
 ---
 
@@ -31,6 +34,7 @@
 | **borg-neural-implant-feature** | Schreibt Produktionscode für ein Feature auf Basis einer `borg-cube.md`-Spezifikation |
 | **borg-implementation-drone** | Führt Tasks aus einer Task-Liste strikt und deterministisch aus — Code, Tests, Doku |
 | **borg-feature-integrator** | Integriert einen Augmentation-Handoff in eine bestehende Task-Liste oder legt eine neue an |
+| **borg-review-drone** | Prüft Feature-Diffs auf Architektur, Tests, Seiteneffekte und Release-Risiken |
 
 ---
 
@@ -49,12 +53,27 @@
 | Agent | Zweck |
 |---|---|
 | **borg-interface-readme** | Generiert eine hochwertige `README.md` für ein Repository auf Basis von Projektstruktur & Feature-Specs |
+| **borg-handover-drone** | Erstellt Feature-Handover, Teststatus, offene Punkte und PR-/Merge-Text |
 
 ---
 
 ## 🔄 Typischer Workflow
 
 ```
+borg-intake-drone             →  Feature-Idee zu Feature Definition normalisieren
+  ↓
+borg-impact-drone             →  Discovery & Impact-Analyse
+  ↓
+borg-planning-drone           →  Delivery Plan mit Work Packages
+  ↓
+borg-git-orchestrator         →  Feature-Worktree vorbereiten
+  ↓
+borg-implementation-drone     →  Work Package implementieren
+  ↓
+borg-review-drone             →  Quality Gate prüfen
+  ↓
+borg-handover-drone           →  Handover und PR-Text erzeugen
+
 borg-queen-architect         →  Spec (borg-cube.md) & Architektur planen
   ↓  (max. 3 Korrekturzyklen bei Review-Fehlern)
 borg-requirement-node        →  Spec reviewen & qualitätssichern

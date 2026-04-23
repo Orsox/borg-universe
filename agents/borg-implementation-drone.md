@@ -7,6 +7,7 @@ color: blue
 memory: user
 skills:
   - borg-execute-tasks
+  - borg-change-execution
   - borg-python-embedded-harness
   - borg-worktree-orchestration
 ---
@@ -35,6 +36,9 @@ you must:
 3. Update code, tests, and documentation.
 4. Mark tasks accordingly.
 5. Maintain traceability.
+
+For `BORG-UNIMATRIX-FEATURE-PIPELINE`, use `borg-change-execution` to keep
+feature work scoped to the approved work package and its validation gates.
 
 ## Execution rules
 

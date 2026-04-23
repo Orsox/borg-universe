@@ -69,6 +69,7 @@
     <table>
       <thead>
         <tr>
+          <th>ID</th>
           <th>Title</th>
           <th>Status</th>
           <th>Project</th>
@@ -82,6 +83,7 @@
       <tbody>
         {% for task in tasks %}
         <tr>
+          <td><code>{{ task.id }}</code></td>
           <td><a href="/tasks/{{ task.id }}">{{ task.title }}</a></td>
           <td><span class="badge {{ task.status|badge_class }}">{{ task.status }}</span></td>
           <td>{{ project_labels.get(task.project_id, task.project_id or "") }}</td>
@@ -100,7 +102,7 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="8">{% include "partials/empty.html" with context %}</td></tr>
+        <tr><td colspan="9">{% include "partials/empty.html" with context %}</td></tr>
         {% endfor %}
       </tbody>
     </table>

@@ -1,0 +1,190 @@
+id: BORG-UNIMATRIX-FEATURE-PIPELINE
+title: Borg Unimatrix Feature Pipeline
+description: End-to-end workflow for intake, discovery, planning, implementation, quality review, and handover of new features or new functionality.
+status: defined
+entry_node: feature-intake
+nodes:
+  - id: feature-intake
+    borg_name: Borg Intake Drone
+    role: intake
+    agent: borg-intake-drone
+    tasks:
+      - id: normalize-feature-request
+        title: Normalize feature idea into a compact feature definition
+        prompt: >-
+          Convert the user's feature idea into a compact Feature Definition.
+          Capture goal, user or business value, in-scope behavior, non-goals,
+          risks, dependencies, acceptance signals, and missing information.
+          Ask for clarification only when an answer blocks responsible planning;
+          otherwise record explicit assumptions.
+        status: queued
+
+  - id: discovery-impact
+    borg_name: Borg Impact Drone
+    role: impact_analyst
+    agent: borg-impact-drone
+    tasks:
+      - id: analyze-feature-impact
+        title: Discover affected project areas and risks
+        prompt: >-
+          Analyze the repository for modules, services, APIs, UI areas, data
+          models, tests, templates, configuration, migrations, and documentation
+          affected by the Feature Definition. Reuse existing scanners, specs,
+          task context, and project conventions. Produce an Impact Analysis
+          with likely files, side effects, architecture implications, open
+          questions, assumptions, and a recommended implementation strategy.
+        status: draft
+
+  - id: delivery-planning
+    borg_name: Borg Planning Drone
+    role: delivery_planner
+    agent: borg-planning-drone
+    tasks:
+      - id: create-feature-delivery-plan
+        title: Create feature delivery work packages
+        prompt: >-
+          Build a concrete Delivery Plan from the Feature Definition and Impact
+          Analysis. Split work into small implementation packages covering
+          backend, frontend, database, interfaces, tests, migrations,
+          configuration, templates, and documentation where relevant. Each work
+          package must include scope, dependencies, Definition of Done,
+          validation commands, and an implementation prompt beginning with
+          <nano-implant>.
+        status: draft
+
+  - id: git-prepare-feature-task
+    borg_name: Git Prepare Feature Task Workspace
+    role: workspace_orchestrator
+    agent: borg-git-orchestrator
+    tasks:
+      - id: prepare-feature-task-worktree
+        title: Prepare isolated feature implementation worktree
+        prompt: >-
+          Prepare an isolated implementation worktree for exactly one approved
+          feature work package. Record task_id, workflow_id,
+          feature_definition_revision, source_branch, branch_name,
+          worktree_path, base_commit, retry_index, and
+          lifecycle_state=prepared. Use branch pattern
+          feature/<task-id>/implementation-v<retry> and worktree pattern
+          .worktrees/features/<task-id>/implementation-v<retry>.
+        status: draft
+
+  - id: feature-implementation
+    borg_name: Borg Implementation Drone
+    role: implementer
+    agent: borg-implementation-drone
+    tasks:
+      - id: execute-feature-work-package
+        title: Implement one approved feature work package
+        prompt: >-
+          Execute exactly one approved feature work package in the prepared task
+          workspace. The implementation prompt must start with <nano-implant>.
+          Follow existing project conventions, keep scope limited to the work
+          package, update or create tests, update technical documentation, and
+          generate migration, configuration, or template files only when the
+          plan requires them. Stop and report if the workspace metadata, plan,
+          or dependencies are inconsistent.
+        status: draft
+
+  - id: git-finalize-feature-task
+    borg_name: Git Finalize Feature Task Workspace
+    role: workspace_orchestrator
+    agent: borg-git-orchestrator
+    tasks:
+      - id: finalize-feature-task-worktree
+        title: Finalize feature implementation worktree
+        prompt: >-
+          Finalize the active feature task worktree after implementation.
+          Capture changed files, head_commit, git status, validation results,
+          generated artifacts, and remaining blockers. Mark the workspace
+          reviewable when the work package is complete.
+        status: draft
+
+  - id: feature-quality-gate
+    borg_name: Borg Review Drone
+    role: reviewer
+    agent: borg-review-drone
+    tasks:
+      - id: review-feature-diff
+        title: Review feature diff and quality gates
+        prompt: >-
+          Review the feature diff against the Feature Definition, Impact
+          Analysis, and Delivery Plan. Check architecture fit, naming,
+          convention usage, test coverage, side effects, documentation,
+          migrations, configuration changes, security, and breaking changes.
+          Produce findings ordered by severity, required fixes, residual risks,
+          and manual verification steps.
+        status: draft
+        commands:
+          - id: validate-workflow-yaml-shape
+            run: >-
+              python3 -c "from pathlib import Path; import sys, yaml;
+              path=Path('BORG/workflows/borg-unimatrix-feature-pipeline.yaml');
+              data=yaml.safe_load(path.read_text());
+              required=('id','title','description','status','entry_node','nodes','steps');
+              missing=[key for key in required if key not in data];
+              node_ids={node['id'] for node in data.get('nodes', [])};
+              step_refs=[ref for step in data.get('steps', []) for ref in step.get('nodes', [])];
+              unknown=[ref for ref in step_refs if ref not in node_ids];
+              print('workflow shape ok') if not missing and not unknown else print({'missing': missing, 'unknown': unknown});
+              sys.exit(1 if missing or unknown else 0)"
+            timeout_seconds: 120
+
+  - id: feature-handover
+    borg_name: Borg Handover Drone
+    role: handover
+    agent: borg-handover-drone
+    tasks:
+      - id: produce-feature-handover
+        title: Produce feature handover and PR text
+        prompt: >-
+          Produce the final handover from the Feature Definition, Impact
+          Analysis, Delivery Plan, implementation report, validation logs, and
+          quality-gate findings. Include change summary, affected components,
+          test status, open points, deployment or migration notes, manual
+          verification, and a concise PR description or merge text.
+        status: draft
+
+steps:
+  - id: intake-phase
+    title: Feature intake
+    mode: sequential
+    nodes:
+      - feature-intake
+
+  - id: discovery-phase
+    title: Discovery and impact analysis
+    mode: sequential
+    nodes:
+      - discovery-impact
+
+  - id: planning-phase
+    title: Delivery planning
+    mode: sequential
+    nodes:
+      - delivery-planning
+
+  - id: implementation-phase
+    title: Feature implementation
+    mode: sequential
+    nodes:
+      - git-prepare-feature-task
+      - feature-implementation
+      - git-finalize-feature-task
+
+  - id: quality-phase
+    title: Review and quality gate
+    mode: sequential
+    nodes:
+      - feature-quality-gate
+    retry:
+      condition: nodes['feature-quality-gate'].output.retry_required == true
+      max_attempts: 2
+      target_node: git-prepare-feature-task
+      message: 'Quality gate requires fixes. Re-run implementation for the affected work package using these findings: {{nodes[''feature-quality-gate''].output.findings}}'
+
+  - id: handover-phase
+    title: Handover
+    mode: sequential
+    nodes:
+      - feature-handover

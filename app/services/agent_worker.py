@@ -50,9 +50,11 @@ class AgentWorker:
     def process_next_batch(self) -> int:
         self.recover_stale_running_tasks()
         tasks = self.task_repository.list_by_status("queued", self._queue_parallelism())
+        processed = 0
         for task in tasks:
-            self.process_task(task)
-        return len(tasks)
+            if self.process_task(task).get("claimed"):
+                processed += 1
+        return processed
 
     def recover_stale_running_tasks(self) -> int:
         timeout_seconds = float(getattr(self.settings, "worker_running_task_timeout_seconds", 900.0))
@@ -87,13 +89,16 @@ class AgentWorker:
         skill_name = task.get("assigned_skill")
         initial_events: list[dict[str, Any]] = []
         try:
+            claimed_task = self.task_repository.claim_queued_task(task_id)
+            if not claimed_task:
+                return {"task_id": task_id, "status": str(task.get("status") or ""), "claimed": False}
+            task = claimed_task
             initial_events = self.task_repository.list_events(task_id)
             resume_context = self._latest_workflow_resume(initial_events)
             if resume_context:
                 print(f"[WORKER] picked up post-review continuation for task {task_id}")
             else:
                 print(f"[WORKER] picked up task {task_id}")
-            self.task_repository.update_status(task_id, "running")
             self.task_repository.add_event(
                 task_id,
                 "agent_started",
@@ -103,7 +108,7 @@ class AgentWorker:
             if self._is_implementation_task(task):
                 result = self._run_implementation_task(task)
                 self.task_repository.update_status(task_id, "done")
-                return result
+                return {**result, "claimed": True}
             if self._is_implementation_task_without_codeword(task):
                 self.task_repository.add_event(
                     task_id,
@@ -112,11 +117,11 @@ class AgentWorker:
                     {"agent_name": agent_name},
                 )
                 self.task_repository.update_status(task_id, "needs_input")
-                return {"task_id": task_id, "status": "needs_input", "reason": "missing_nano_implant"}
+                return {"task_id": task_id, "status": "needs_input", "reason": "missing_nano_implant", "claimed": True}
             if not resume_context:
                 sparse_project = self._maybe_pause_for_sparse_project(task)
                 if sparse_project:
-                    return sparse_project
+                    return {**sparse_project, "claimed": True}
             if resume_context:
                 review_context = self._latest_review_context(initial_events)
                 print(f"[WORKFLOW] Continuing after review with input: {review_context.get('notes') if review_context else 'None'}")
@@ -211,7 +216,7 @@ class AgentWorker:
                     {"reason": "empty_project_lookup"},
                 )
                 self.task_repository.update_status(task_id, "needs_input")
-                return {"task_id": task_id, "status": "needs_input", "result_count": 0}
+                return {"task_id": task_id, "status": "needs_input", "result_count": 0, "claimed": True}
 
             self.task_repository.add_event(
                 task_id,
@@ -261,12 +266,12 @@ class AgentWorker:
                     },
                 )
                 self.task_repository.update_status(task_id, "review_required")
-                return {"task_id": task_id, "status": "review_required", "result_count": result_count}
+                return {"task_id": task_id, "status": "review_required", "result_count": result_count, "claimed": True}
 
             if workflow_result.get("uses_explicit_review") and workflow_result.get("completed_all_stages"):
                 print("[WORKFLOW] marking task as done")
                 self.task_repository.update_status(task_id, "done")
-                return {"task_id": task_id, "status": "done", "result_count": result_count}
+                return {"task_id": task_id, "status": "done", "result_count": result_count, "claimed": True}
 
             self.task_repository.add_event(
                 task_id,
@@ -275,7 +280,7 @@ class AgentWorker:
                 {"artifact_id": artifact["id"]},
             )
             self.task_repository.update_status(task_id, "review_required")
-            return {"task_id": task_id, "status": "review_required", "result_count": result_count}
+            return {"task_id": task_id, "status": "review_required", "result_count": result_count, "claimed": True}
         except Exception as exc:
             logger.exception("Worker failed while processing task %s", task_id)
             if _is_file_access_blocker_error(exc):
@@ -286,7 +291,7 @@ class AgentWorker:
                     {"agent_name": agent_name, "skill_name": skill_name, "guard": "file_access_blocker"},
                 )
                 self.task_repository.update_status(task_id, "needs_input")
-                return {"task_id": task_id, "status": "needs_input", "error": str(exc), "reason": "file_access_blocker"}
+                return {"task_id": task_id, "status": "needs_input", "error": str(exc), "reason": "file_access_blocker", "claimed": True}
             if _is_temporary_infrastructure_error(exc):
                 retry_events = [
                     event
@@ -316,6 +321,7 @@ class AgentWorker:
                         "retry": False,
                         "attempt": attempt,
                         "max_retries": max_retries,
+                        "claimed": True,
                     }
                 self.task_repository.add_event(
                     task_id,
@@ -336,6 +342,7 @@ class AgentWorker:
                     "retry": True,
                     "attempt": attempt,
                     "max_retries": max_retries,
+                    "claimed": True,
                 }
             self.task_repository.add_event(
                 task_id,
@@ -344,7 +351,7 @@ class AgentWorker:
                 {"agent_name": agent_name, "skill_name": skill_name},
             )
             self.task_repository.update_status(task_id, "failed")
-            return {"task_id": task_id, "status": "failed", "error": str(exc)}
+            return {"task_id": task_id, "status": "failed", "error": str(exc), "claimed": True}
 
     def _queue_parallelism(self) -> int:
         try:
@@ -573,9 +580,7 @@ class AgentWorker:
         if self.claude_code_client is not None:
             return True
         system = orchestration.agent_selection.agent_system
-        model_name = (orchestration.local_model.model_name or "").strip().lower()
-        agent_name = (orchestration.agent_selection.agent_name or "").strip().lower()
-        return system in {"claude_code", "cloud_code"} or model_name == "borg-cpu" or agent_name == "borg-cpu"
+        return system in {"claude_code", "cloud_code"}
 
     def _is_implementation_task(self, task: dict[str, Any]) -> bool:
         return (
@@ -1712,6 +1717,15 @@ class AgentWorker:
         raw_tasks = parsed.get("implementation_tasks") or parsed.get("tasks")
         if not isinstance(raw_tasks, list):
             return []
+        existing_children = self.task_repository.list_child_implementation_tasks(str(parent_task["id"]))
+        existing_keys = {
+            (
+                str(child.get("title") or "").strip(),
+                str(child.get("description") or "").strip(),
+                int(child.get("sequence_index") or 0),
+            )
+            for child in existing_children
+        }
         created: list[dict[str, Any]] = []
         for index, raw_task in enumerate(raw_tasks, start=1):
             if not isinstance(raw_task, dict):
@@ -1729,29 +1743,33 @@ class AgentWorker:
             depends_on = raw_task.get("depends_on")
             if isinstance(depends_on, list) and depends_on:
                 description_parts.append(f"Depends on: {', '.join(str(item) for item in depends_on)}")
+            description = "\n".join(description_parts).strip()
+            dedupe_key = (title[:200], description, index)
+            if dedupe_key in existing_keys:
+                continue
             try:
-                created.append(
-                    self.task_repository.create_task(
-                        TaskCreate(
-                            title=title[:200],
-                            description="\n".join(description_parts).strip(),
-                            project_id=parent_task.get("project_id"),
-                            workflow_id=None,
-                            target_platform=parent_task.get("target_platform"),
-                            target_mcu=parent_task.get("target_mcu"),
-                            board=parent_task.get("board"),
-                            local_path=parent_task.get("local_path"),
-                            pycharm_mcp_enabled=bool(parent_task.get("pycharm_mcp_enabled")),
-                            topic=parent_task.get("topic"),
-                            requested_by=parent_task.get("requested_by"),
-                            assigned_agent="borg-implementation-drone",
-                            assigned_skill="implementation",
-                            sequence_index=index,
-                            workspace_metadata=workspace_metadata,
-                        ),
-                        initial_status="draft",
-                    )
+                created_task = self.task_repository.create_task(
+                    TaskCreate(
+                        title=title[:200],
+                        description=description,
+                        project_id=parent_task.get("project_id"),
+                        workflow_id=None,
+                        target_platform=parent_task.get("target_platform"),
+                        target_mcu=parent_task.get("target_mcu"),
+                        board=parent_task.get("board"),
+                        local_path=parent_task.get("local_path"),
+                        pycharm_mcp_enabled=bool(parent_task.get("pycharm_mcp_enabled")),
+                        topic=parent_task.get("topic"),
+                        requested_by=parent_task.get("requested_by"),
+                        assigned_agent="borg-implementation-drone",
+                        assigned_skill="implementation",
+                        sequence_index=index,
+                        workspace_metadata=workspace_metadata,
+                    ),
+                    initial_status="draft",
                 )
+                created.append(created_task)
+                existing_keys.add(dedupe_key)
             except Exception as exc:
                 self.task_repository.add_event(
                     parent_task["id"],

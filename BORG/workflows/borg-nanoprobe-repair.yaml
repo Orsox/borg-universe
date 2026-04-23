@@ -53,12 +53,26 @@ nodes:
           - No new anomalies or errors introduced
           - Produce a compact integrity report
         status: draft
+  - id: implementation-trigger
+    borg_name: Implementation Trigger
+    role: implementation_trigger
+    agent: borg-disassembler
+    tasks:
+      - id: trigger-implementation
+        title: Trigger stored nanoprobe implementation tasks
+        prompt: Queue stored implementation tasks created during nanoprobe planning.
+        status: draft
 steps:
   - id: repair
     title: Diagnose and repair defect
     mode: sequential
     nodes:
       - nanoprobe-drone
+  - id: implementation-trigger-phase
+    title: Trigger implementation task execution
+    mode: sequential
+    nodes:
+      - implementation-trigger
   - id: validation
     title: Post-repair integrity scan
     mode: sequential

@@ -1213,8 +1213,29 @@ def test_task_detail_shows_newest_history_entry_first(monkeypatch) -> None:
     response = client.get("/tasks/t1")
 
     assert response.status_code == 200
+    assert "<dt>Task ID</dt>" in response.text
+    assert "<code>t1</code>" in response.text
     assert response.text.index("last_step") < response.text.index("first_step")
     assert response.text.index("Newest step") < response.text.index("Oldest step")
+
+
+def test_tasks_page_shows_task_id_column(monkeypatch) -> None:
+    fake_client = FakeSupabaseClient(
+        {
+            "tasks": [
+                {"id": "57df7a8f-76b1-4829-983c-276fc9ab9e92", "title": "Task", "status": "queued", "updated_at": "2026-04-12T10:00:00+00:00"}
+            ],
+            "projects": [],
+        }
+    )
+    monkeypatch.setattr(tasks_module, "SupabaseRestClient", lambda _settings: fake_client)
+    client = TestClient(create_app())
+
+    response = client.get("/tasks")
+
+    assert response.status_code == 200
+    assert "<th>ID</th>" in response.text
+    assert "57df7a8f-76b1-4829-983c-276fc9ab9e92" in response.text
 
 
 def test_task_review_confirm_requeues_task(monkeypatch) -> None:

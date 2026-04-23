@@ -551,6 +551,7 @@ async def task_detail(
             "workflow_stage_options": workflow_stage_options,
             "suggested_resume_stage_index": suggested_resume_stage_index,
             "detail_fields": [
+                ("Task ID", "id"),
                 ("Project", "project_id"),
                 ("Workflow", "workflow_id"),
                 ("Description", "description"),
@@ -723,6 +724,7 @@ async def review_task(
             "workflow_stage_options": workflow_stage_options,
             "suggested_resume_stage_index": suggested_resume_stage_index,
             "detail_fields": [
+                ("Task ID", "id"),
                 ("Project", "project_id"),
                 ("Workflow", "workflow_id"),
                 ("Description", "description"),

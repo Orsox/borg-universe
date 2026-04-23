@@ -74,6 +74,26 @@ def test_task_repository_retries_when_workspace_metadata_is_unknown_to_postgrest
     assert "workspace_metadata" not in task_posts[1]["body"]
 
 
+def test_task_repository_retries_when_human_review_input_is_unknown_to_postgrest() -> None:
+    class HumanReviewInputCacheClient(FakeSupabaseClient):
+        def request(self, method: str, path: str, **kwargs):  # type: ignore[override]
+            body = kwargs.get("body") or {}
+            if method.upper() == "POST" and path == "tasks" and "human_review_input" in body:
+                raise SupabaseRestError(400, '{"code":"PGRST204","message":"Could not find the human_review_input column"}')
+            return super().request(method, path, **kwargs)
+
+    client = HumanReviewInputCacheClient({"tasks": [], "task_events": []})
+    repo = TaskRepository(client)  # type: ignore[arg-type]
+
+    task = repo.create_task(TaskCreate(title="Retry without human review input"))
+
+    assert task["title"] == "Retry without human review input"
+    task_posts = [call for call in client.calls if call["method"] == "POST" and call["path"] == "tasks"]
+    assert len(task_posts) == 2
+    assert "human_review_input" in task_posts[0]["body"]
+    assert "human_review_input" not in task_posts[1]["body"]
+
+
 def test_task_repository_update_status_records_transition() -> None:
     client = FakeSupabaseClient(
         {"tasks": [{"id": "t1", "title": "Task", "status": "draft"}], "task_events": []}
@@ -85,6 +105,23 @@ def test_task_repository_update_status_records_transition() -> None:
     assert updated is not None
     assert updated["status"] == "queued"
     assert client.tables["task_events"][0]["payload"] == {"from": "draft", "to": "queued"}
+
+
+def test_task_repository_claim_queued_task_updates_status_once() -> None:
+    client = FakeSupabaseClient(
+        {"tasks": [{"id": "t1", "title": "Task", "status": "queued"}], "task_events": []}
+    )
+    repo = TaskRepository(client)  # type: ignore[arg-type]
+
+    claimed = repo.claim_queued_task("t1")
+    claimed_again = repo.claim_queued_task("t1")
+
+    assert claimed is not None
+    assert claimed["status"] == "running"
+    assert claimed_again is None
+    assert client.tables["tasks"][0]["status"] == "running"
+    status_events = [event for event in client.tables["task_events"] if event["event_type"] == "status_changed"]
+    assert len(status_events) == 1
 
 
 def test_project_repository_lists_active_projects() -> None:

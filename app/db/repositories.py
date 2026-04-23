@@ -162,6 +162,8 @@ class TaskRepository:
         body = task.model_dump(exclude_none=True)
         if not body.get("workspace_metadata"):
             body.pop("workspace_metadata", None)
+        if not body.get("human_review_input"):
+            body.pop("human_review_input", None)
         body["status"] = initial_status
         try:
             row = self.client.request(
@@ -172,10 +174,14 @@ class TaskRepository:
                 prefer="return=representation",
             )[0]
         except SupabaseRestError as exc:
-            if "workspace_metadata" not in str(exc):
+            error_text = str(exc)
+            if "workspace_metadata" not in error_text and "human_review_input" not in error_text:
                 raise
             fallback_body = dict(body)
-            fallback_body.pop("workspace_metadata", None)
+            if "workspace_metadata" in error_text:
+                fallback_body.pop("workspace_metadata", None)
+            if "human_review_input" in error_text:
+                fallback_body.pop("human_review_input", None)
             row = self.client.request(
                 "POST",
                 "tasks",
@@ -219,6 +225,26 @@ class TaskRepository:
             "status_changed",
             f"Status changed from {previous['status']} to {updated['status']}.",
             {"from": previous["status"], "to": updated["status"]},
+        )
+        return updated
+
+    def claim_queued_task(self, task_id: str) -> dict[str, Any] | None:
+        rows = self.client.request(
+            "PATCH",
+            "tasks",
+            query={"select": "*", "id": f"eq.{task_id}", "status": "eq.queued"},
+            body={"status": "running"},
+            prefer="return=representation",
+        )
+        if not rows:
+            return None
+
+        updated = rows[0]
+        self.add_event(
+            task_id,
+            "status_changed",
+            "Status changed from queued to running.",
+            {"from": "queued", "to": "running"},
         )
         return updated
 

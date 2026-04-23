@@ -268,6 +268,62 @@ steps:
     assert "Iteration 1" in llm.calls[0]
 
 
+def test_worker_keeps_local_llm_path_when_local_model_is_selected(tmp_path: Path) -> None:
+    workflows_root = tmp_path / "workflows"
+    workflows_root.mkdir()
+    (workflows_root / "demo.yaml").write_text(
+        """id: demo
+title: Demo
+description: Local model path test.
+status: draft
+entry_node: intake
+nodes:
+  - id: intake
+    borg_name: Intake Agent
+    agent: local-llm
+    tasks:
+      - id: normalize
+        title: Normalize request
+        prompt: Normalize the task.
+steps:
+  - id: intake
+    title: Intake
+    mode: sequential
+    nodes:
+      - intake
+""",
+        encoding="utf-8",
+    )
+    settings = _settings(tmp_path, workflows_root)
+    OrchestrationSettingsStore(settings.borg_root).save(
+        agent_selection=AgentSelectionSettings(agent_system="local_model", agent_name="borg-cpu"),
+        local_model=LocalModelSettings(model_name="borg-cpu"),
+    )
+    client = FakeSupabaseClient(
+        {
+            "tasks": [
+                {"id": "t1", "title": "Task 1", "status": "queued", "workflow_id": "demo", "assigned_agent": "local-llm"}
+            ],
+            "task_events": [],
+            "artifacts": [],
+        }
+    )
+    llm = FakeLocalLlmClient()
+    worker = AgentWorker(
+        task_repository=TaskRepository(client),  # type: ignore[arg-type]
+        artifact_repository=ArtifactRepository(client),  # type: ignore[arg-type]
+        settings=settings,
+        local_llm_client=llm,
+    )
+
+    worker.process_next_batch()
+
+    assert len(llm.calls) == 3
+    request_events = [event for event in client.tables["task_events"] if event["event_type"] == "llm_request"]
+    assert request_events
+    assert all(event["payload"]["provider"] == "local" for event in request_events)
+
+
 def test_worker_delegates_borg_cpu_tasks_to_claude_code_with_project_agents(tmp_path: Path) -> None:
     workflows_root = tmp_path / "workflows"
     workflows_root.mkdir()
@@ -671,6 +727,89 @@ steps:
     assert created_tasks[1]["sequence_index"] == 2
     assert any(event["event_type"] == "implementation_tasks_created" for event in client.tables["task_events"])
     assert any(event["event_type"] == "workspace_metadata_updated" for event in client.tables["task_events"])
+
+
+def test_worker_deduplicates_implementation_tasks_when_parent_is_requeued(tmp_path: Path) -> None:
+    workflows_root = tmp_path / "workflows"
+    workflows_root.mkdir()
+    (workflows_root / "demo.yaml").write_text(
+        """id: demo
+title: Demo
+description: Implementation dedupe test.
+status: draft
+entry_node: intake
+nodes:
+  - id: intake
+    borg_name: Queen
+    agent: borg-queen-architect
+    tasks:
+      - id: architecture-planning
+        title: Plan architecture
+        prompt: Route this through the queen architect.
+steps:
+  - id: intake
+    title: Intake
+    mode: sequential
+    nodes:
+      - intake
+""",
+        encoding="utf-8",
+    )
+    settings = _settings(tmp_path, workflows_root)
+    client = FakeSupabaseClient(
+        {
+            "tasks": [
+                {
+                    "id": "parent",
+                    "title": "Task 1",
+                    "description": "Implement the requested change.",
+                    "status": "queued",
+                    "workflow_id": "demo",
+                    "assigned_agent": "local-llm",
+                    "project_id": "project-1",
+                    "local_path": str(tmp_path),
+                }
+            ],
+            "task_events": [],
+            "artifacts": [],
+            "project_specs": [],
+        }
+    )
+
+    class StructuredClaudeCodeClient(FakeClaudeCodeClient):
+        def send_prompt(self, prompt: str) -> dict[str, object]:
+            self.prompts.append(prompt)
+            return {
+                "content": json.dumps(
+                    {
+                        "first_node_id": "intake",
+                        "summary": "Structured specs and tasks ready.",
+                        "implementation_tasks": [
+                            {"title": "Build module A parser", "prompt": "Implement only the parser."},
+                        ],
+                    }
+                ),
+                "response": {},
+                "command": ["claude", "-p", "<prompt>", "--model", "borg-cpu"],
+                "stderr": "",
+            }
+
+    worker = AgentWorker(
+        task_repository=TaskRepository(client),  # type: ignore[arg-type]
+        artifact_repository=ArtifactRepository(client),  # type: ignore[arg-type]
+        settings=settings,
+        claude_code_client=StructuredClaudeCodeClient(project_root=str(tmp_path)),
+    )
+
+    first_result = worker.process_task(dict(client.tables["tasks"][0]))
+    client.tables["tasks"][0]["status"] = "queued"
+    second_result = worker.process_task(dict(client.tables["tasks"][0]))
+
+    created_tasks = [task for task in client.tables["tasks"] if task["id"] != "parent"]
+    assert first_result["claimed"] is True
+    assert second_result["claimed"] is True
+    assert len(created_tasks) == 1
+    assert created_tasks[0]["title"] == "Build module A parser"
 
 
 def test_worker_auto_creates_missing_workcube_and_records_review_context(tmp_path: Path) -> None:

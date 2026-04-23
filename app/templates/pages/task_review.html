@@ -192,6 +192,8 @@
               <span class="badge queued">{{ workflow_labels.get(task.get(key), task.get(key)) }}</span>
             {% elif key == "pycharm_mcp_enabled" %}
               <span class="badge {{ 'done' if task.get(key) else 'queued' }}">{{ "yes" if task.get(key) else "no" }}</span>
+            {% elif key == "id" and task.get(key) %}
+              <code>{{ task.get(key) }}</code>
             {% else %}
               {{ task.get(key) or "" }}
             {% endif %}
