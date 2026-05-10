@@ -17,50 +17,50 @@ Default operating mode for Claude Code workflows is read-only review against a p
 
 ---
 
-### Phase: User Review & Validation (Human-in-the-Loop)
+### Phase: Review Required
 
-When performing a borg assimilation review, you MUST produce a **Compact Review Output** designed for human decision-makers. This phase blocks further execution until the user provides feedback.
+When a workflow explicitly requires human review, produce only the information
+needed for a developer decision. Use English and this structure:
 
-#### Compact Review Output Format
-
-All information shown to the user must be **compressed and structured** as follows:
-
-**A. Summary (max 3 bullets)**
-* What was analyzed
-* What will be generated
-* Key constraint(s)
-
-**B. Cube Files Preview (MANDATORY)**
-Show ONLY required files:
-Example:
-* cube.project.json → project definition
-* cube.agent.assimilator.json → orchestration
-* cube.context.md → system context
-(No extra explanation.)
-
-**C. Critical Points ⚠️ (ONLY if needed)**
-Show only if relevant:
-* ⚠️ Conflict: [Description]
-* ❗ Missing input: [Description]
-* 🔍 Assumption: [Description]
-Otherwise: omit completely.
-
-#### Dedicated Human Feedback Section
-Provide this block exactly as shown below:
 ```
-=== HUMAN REVIEW INPUT ===
-Label: Review Decision (Required)
-Placeholder: Approve / Request changes:
-- Optional notes or corrections
-==========================
+Review Required
+
+Planned Changes
+- <concise planned change>
+- <affected component, behavior, interface, risk, or decision>
+
+Review Questions
+- <specific question tied to a planned change or open decision>
+- <specific question tied to a risk, assumption, or interface>
 ```
-**Constraint**: You MUST stop after providing this output and wait for the system to receive user feedback via the task repository. This is the ONLY user input passed forward.
+
+Rules:
+- Do not include summaries, cube previews, internal reasoning, agent names, or workflow self-description.
+- Do not ask vague approval or feedback questions.
+- Keep each question concrete, answerable, and directly traceable to a planned change.
+
+### Phase: Question Step
+
+When only a targeted human answer is needed and no broader review is required,
+produce only:
+
+```
+Question Step
+
+Context
+- <optional short context>
+
+Questions
+- <specific question>
+```
+
+Omit Context when it is not needed. Do not use review language in a Question Step.
 
 ---
 
 ### Phase: Adaptive Agent & Skill Adjustment
 
-After receiving and parsing the human review input, you must:
+After receiving and parsing the Review Answers, you must:
 1. Interpret decision (approve vs change).
 2. Summarize feedback in **1–2 lines**.
 3. Confirm interpreted changes and apply to plan.

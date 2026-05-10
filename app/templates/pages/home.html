@@ -109,14 +109,14 @@
         <dl class="detail-list">
           <dt>Processed</dt><dd>{{ processed_task_count }}</dd>
           <dt>Active</dt><dd>{{ active_task_count }}</dd>
-          <dt>Needs input</dt><dd>{{ needs_input_count }}</dd>
+          <dt>Question steps</dt><dd>{{ needs_input_count }}</dd>
         </dl>
       </div>
     </section>
 
     <section class="section panel">
       <div class="panel-header">
-        <h2>Input required</h2>
+        <h2>Question steps</h2>
         <span class="badge review_required">{{ needs_input_count }}</span>
       </div>
       <div class="panel-body">
@@ -135,7 +135,7 @@
             <dt>Path</dt><dd>{{ current_input_task.local_path or "" }}</dd>
           </dl>
           <div class="actions">
-            <a class="button" href="/tasks/{{ current_input_task.id }}/review">Provide input</a>
+            <a class="button" href="/tasks/{{ current_input_task.id }}/review">Answer questions</a>
             <a class="button secondary" href="/tasks/{{ current_input_task.id }}">Open history</a>
           </div>
         </article>
@@ -155,8 +155,8 @@
         {% endif %}
         {% else %}
         <div class="empty">
-          <strong>No tasks waiting for input</strong>
-          <p>Tasks that need a decision, missing context, or corrected project data appear here first.</p>
+          <strong>No question steps waiting</strong>
+          <p>Tasks that need a specific developer answer appear here first.</p>
         </div>
         {% endif %}
       </div>

@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import subprocess
+import sys
 import time
 from difflib import SequenceMatcher
 from datetime import datetime, timedelta, timezone
@@ -107,8 +108,9 @@ class AgentWorker:
             )
             if self._is_implementation_task(task):
                 result = self._run_implementation_task(task)
-                self.task_repository.update_status(task_id, "done")
-                return {**result, "claimed": True}
+                status = result.get("status", "done")
+                self.task_repository.update_status(task_id, status)
+                return {**result, "claimed": True, "status": status}
             if self._is_implementation_task_without_codeword(task):
                 self.task_repository.add_event(
                     task_id,
@@ -193,6 +195,27 @@ class AgentWorker:
                     )
                     self.task_repository.update_status(task_id, "failed")
                     raise RuntimeError(message)
+            if (
+                workflow_result.get("requires_file_changes")
+                and not workflow_result.get("triggered_implementation_task_count")
+                and not workflow_result.get("paused_for_review")
+                and not workflow_result.get("paused_for_question")
+            ):
+                message = (
+                    "Workflow requires implementation output, but no file changes or implementation tasks were produced."
+                )
+                self.task_repository.add_event(
+                    task_id,
+                    "workflow_file_changes_missing",
+                    message,
+                    {
+                        "workflow_id": task.get("workflow_id"),
+                        "executed_stage_count": workflow_result.get("executed_stage_count", 0),
+                        "implementation_stage_empty_count": workflow_result.get("implementation_stage_empty_count", 0),
+                    },
+                )
+                self.task_repository.update_status(task_id, "failed")
+                return {"task_id": task_id, "status": "failed", "error": message, "claimed": True}
             self.task_repository.add_event(
                 task_id,
                 "project_lookup_started",
@@ -243,14 +266,19 @@ class AgentWorker:
             )
             self.task_repository.add_event(
                 task_id,
-                "no_file_changes_applied",
-                "No file changes were applied during this run; the worker completed analysis, workflow traversal, and project lookup only.",
+                "implementation_work_queued" if workflow_result.get("triggered_implementation_task_count") else "no_file_changes_applied",
+                (
+                    "Workflow queued implementation task(s); file changes will be applied by child implementation tasks."
+                    if workflow_result.get("triggered_implementation_task_count")
+                    else "No file changes were applied during this run; the worker completed analysis, workflow traversal, and project lookup only."
+                ),
                 {
                     "applied": False,
                     "workflow_id": task.get("workflow_id"),
                     "project_id": task.get("project_id"),
                     "local_path": task.get("local_path"),
                     "pycharm_mcp_enabled": bool(task.get("pycharm_mcp_enabled")),
+                    "triggered_implementation_task_count": workflow_result.get("triggered_implementation_task_count", 0),
                 },
             )
             if workflow_result.get("paused_for_review"):
@@ -267,6 +295,21 @@ class AgentWorker:
                 )
                 self.task_repository.update_status(task_id, "review_required")
                 return {"task_id": task_id, "status": "review_required", "result_count": result_count, "claimed": True}
+            if workflow_result.get("paused_for_question"):
+                self.task_repository.add_event(
+                    task_id,
+                    "input_requested",
+                    "Workflow reached a question step and needs a specific human answer.",
+                    {
+                        "artifact_id": artifact["id"],
+                        "question_stage_index": workflow_result.get("question_stage_index"),
+                        "question_stage_id": workflow_result.get("question_stage_id"),
+                        "next_stage_index": workflow_result.get("next_stage_index"),
+                        "reason": "question_step",
+                    },
+                )
+                self.task_repository.update_status(task_id, "needs_input")
+                return {"task_id": task_id, "status": "needs_input", "result_count": result_count, "claimed": True}
 
             if workflow_result.get("uses_explicit_review") and workflow_result.get("completed_all_stages"):
                 print("[WORKFLOW] marking task as done")
@@ -275,12 +318,12 @@ class AgentWorker:
 
             self.task_repository.add_event(
                 task_id,
-                "review_required",
-                "Worker completed controlled agentic processing without applying file changes and marked the result for review.",
+                "workflow_completed",
+                "Worker completed controlled agentic processing without a human checkpoint.",
                 {"artifact_id": artifact["id"]},
             )
-            self.task_repository.update_status(task_id, "review_required")
-            return {"task_id": task_id, "status": "review_required", "result_count": result_count, "claimed": True}
+            self.task_repository.update_status(task_id, "done")
+            return {"task_id": task_id, "status": "done", "result_count": result_count, "claimed": True}
         except Exception as exc:
             logger.exception("Worker failed while processing task %s", task_id)
             if _is_file_access_blocker_error(exc):
@@ -484,7 +527,7 @@ class AgentWorker:
         self.task_repository.add_event(
             task_id,
             "llm_resume_processing_started",
-            "Review notes are being sent to the local LLM before workflow execution resumes.",
+            "Developer answers are being applied before workflow execution resumes.",
             {
                 "resume_stage_index": stage_index,
                 "local_path": task.get("local_path"),
@@ -580,7 +623,9 @@ class AgentWorker:
         if self.claude_code_client is not None:
             return True
         system = orchestration.agent_selection.agent_system
-        return system in {"claude_code", "cloud_code"}
+        selected_agent = str(orchestration.agent_selection.agent_name or "").strip().lower()
+        selected_model = str(orchestration.local_model.model_name or "").strip().lower()
+        return system in {"claude_code", "cloud_code"} or selected_agent == "borg-cpu" or selected_model == "borg-cpu"
 
     def _is_implementation_task(self, task: dict[str, Any]) -> bool:
         return (
@@ -596,6 +641,9 @@ class AgentWorker:
 
     def _maybe_pause_for_sparse_project(self, task: dict[str, Any]) -> dict[str, Any] | None:
         if self.local_llm_client is not None or self.claude_code_client is not None:
+            return None
+        workspace_metadata = self._task_workspace_metadata(task)
+        if _clean_text(workspace_metadata.get("worktree_path")):
             return None
         snapshot = self._project_context_snapshot(task)
         if not snapshot.get("exists") or not snapshot.get("sparse"):
@@ -641,6 +689,7 @@ class AgentWorker:
             )
         try:
             assets = client.ensure_project_assets()
+            self._ensure_workspace_metadata_file(task, workspace_project_root)
         except Exception as exc:
             self.task_repository.add_event(
                 task_id,
@@ -703,6 +752,14 @@ class AgentWorker:
         _raise_if_tool_approval_loop(output)
         parsed = _parse_json_object(output)
         summary = str(parsed.get("summary") or output[:500]).strip()
+        blockers = parsed.get("blockers")
+        
+        status = "done"
+        if blockers:
+            status = "failed"
+        elif result.get("stderr") and ("error:" in str(result.get("stderr")).lower() or "fatal error:" in str(result.get("stderr")).lower()):
+            status = "failed"
+
         self.task_repository.add_event(
             task_id,
             "llm_response",
@@ -715,20 +772,23 @@ class AgentWorker:
                 "parsed": parsed,
                 "command": result.get("command"),
                 "stderr": result.get("stderr"),
+                "detected_status": status
             },
         )
         self.task_repository.add_event(
             task_id,
-            "implementation_task_completed",
-            "Implementation Drone completed the queued <nano-implant> task.",
+            "implementation_task_completed" if status == "done" else "implementation_task_incomplete",
+            "Implementation Drone completed the queued <nano-implant> task." if status == "done" else "Implementation Drone completed the task with blockers or errors.",
             {
                 "summary": summary,
                 "modified_files": parsed.get("modified_files"),
                 "tests": parsed.get("tests"),
                 "verification": parsed.get("verification"),
+                "blockers": blockers,
+                "status": status
             },
         )
-        return {"task_id": task_id, "status": "done", "summary": summary}
+        return {"task_id": task_id, "status": status, "summary": summary}
 
     def _run_claude_code_processing(
         self,
@@ -1062,9 +1122,9 @@ class AgentWorker:
             lines.append(f"Resume workflow stage index: {resume_context.get('resume_stage_index', 1)}")
             lines.append("The workflow stage is already selected by Borg Universe; do not override it.")
         if review_context:
-            lines.append("Human review context:")
+            lines.append("Developer answer context:")
             if review_context.get("notes"):
-                lines.append(f"Review notes: {review_context['notes']}")
+                lines.append(f"Answers: {review_context['notes']}")
             if review_context.get("summary"):
                 lines.append(f"Previous summary: {review_context['summary']}")
             if review_context.get("output"):
@@ -1168,6 +1228,27 @@ class AgentWorker:
         if isinstance(ignored, list) and ignored:
             lines.append(f"- Ignored metadata directories: {', '.join(str(item) for item in ignored)}")
         return lines
+
+    def _ensure_workspace_metadata_file(self, task: dict[str, Any], project_root: Path | None) -> None:
+        if not project_root or not project_root.is_dir():
+            return
+        
+        metadata_file = project_root / ".borg-workspace.json"
+        workspace = self._task_workspace_metadata(task)
+        
+        # Ensure we have at least the task_id
+        if not workspace.get("task_id"):
+            workspace["task_id"] = task["id"]
+        if not workspace.get("workflow_id"):
+            workspace["workflow_id"] = task.get("workflow_id")
+        if not workspace.get("lifecycle_state"):
+            workspace["lifecycle_state"] = "prepared"
+            
+        try:
+            import json
+            metadata_file.write_text(json.dumps(workspace, indent=2), encoding="utf-8")
+        except Exception as e:
+            logging.getLogger("borg_universe").warning("Could not write .borg-workspace.json: %s", e)
 
     def _task_workspace_metadata(self, task: dict[str, Any]) -> dict[str, Any]:
         raw = task.get("workspace_metadata")
@@ -1833,13 +1914,13 @@ class AgentWorker:
     def _llm_planning_prompt(self, task: dict[str, Any], review_context: dict[str, str] | None = None) -> str:
         review_lines: list[str] = []
         if review_context:
-            review_lines.append("Human review context:")
+            review_lines.append("Developer answer context:")
             if review_context.get("notes"):
-                review_lines.append(f"Review notes: {review_context['notes']}")
+                review_lines.append(f"Answers: {review_context['notes']}")
             if review_context.get("summary"):
-                review_lines.append(f"LLM summary: {review_context['summary']}")
+                review_lines.append(f"Previous summary: {review_context['summary']}")
             if review_context.get("output"):
-                review_lines.append("LLM output:")
+                review_lines.append("Previous human interaction output:")
                 review_lines.append(review_context["output"])
         return (
             "You are the local agentic execution system. Plan the task, identify needed steps, "
@@ -1860,9 +1941,9 @@ class AgentWorker:
     ) -> str:
         host_path, container_path = self._task_project_paths(task)
         lines = [
-            "You are resuming an agentic workflow after human review.",
+            "You are resuming an agentic workflow after a human checkpoint.",
             "The workflow stage is already selected by the system; do not choose or change the first node.",
-            "Use the human review notes as authoritative input for the next workflow level.",
+            "Use the developer answers as authoritative input for the next workflow level.",
             "Return a concise implementation handoff with risks, required file actions, and verification steps.",
             f"Next workflow level: {stage_index + 1}",
             f"Title: {task.get('title')}",
@@ -1873,16 +1954,16 @@ class AgentWorker:
             f"Workflow: {task.get('workflow_id')}",
         ]
         if review_context:
-            lines.append("Human review context:")
+            lines.append("Developer answer context:")
             if review_context.get("notes"):
-                lines.append(f"Review notes: {review_context['notes']}")
+                lines.append(f"Answers: {review_context['notes']}")
             if review_context.get("summary"):
-                lines.append(f"Previous LLM summary: {review_context['summary']}")
+                lines.append(f"Previous summary: {review_context['summary']}")
             if review_context.get("output"):
-                lines.append("Previous LLM output:")
+                lines.append("Previous human interaction output:")
                 lines.append(review_context["output"])
         else:
-            lines.append("Human review context: none recorded.")
+            lines.append("Developer answer context: none recorded.")
         lines.extend(self._workflow_specific_prompt_lines(task))
         return "\n".join(lines)
 
@@ -1954,8 +2035,11 @@ class AgentWorker:
 
         bounded_stage_index = min(max(stage_index, 0), len(stages) - 1)
         uses_explicit_review = self._workflow_uses_explicit_review_stages(workflow, stages)
+        requires_file_changes = self._workflow_requires_file_changes(workflow, stages)
         current_stage_index = bounded_stage_index
         executed_stage_count = 0
+        triggered_implementation_task_count = 0
+        implementation_stage_empty_count = 0
         while current_stage_index < len(stages):
             stage = stages[current_stage_index]
             stage_id = workflow.steps[current_stage_index].id if current_stage_index < len(workflow.steps) else stage.title
@@ -1982,6 +2066,30 @@ class AgentWorker:
                     "review_stage_id": stage_id,
                     "next_stage_index": next_stage_index,
                 }
+            if uses_explicit_review and self._stage_requires_question_step(workflow, current_stage_index, stage):
+                next_stage_index = current_stage_index + 1 if current_stage_index + 1 < len(stages) else None
+                self.task_repository.add_event(
+                    task["id"],
+                    "workflow_question_step",
+                    "Workflow reached a question step and paused before executing it.",
+                    {
+                        "workflow_id": workflow.id,
+                        "question_stage_id": stage_id,
+                        "question_stage_index": current_stage_index,
+                        "question_stage_title": stage.title,
+                        "next_stage_index": next_stage_index,
+                    },
+                )
+                return {
+                    "paused_for_question": True,
+                    "paused_for_review": False,
+                    "completed_all_stages": False,
+                    "uses_explicit_review": True,
+                    "executed_stage_count": executed_stage_count,
+                    "question_stage_index": current_stage_index,
+                    "question_stage_id": stage_id,
+                    "next_stage_index": next_stage_index,
+                }
 
             if bounded_stage_index > 0:
                 print(f"[WORKFLOW] advancing to post-review stage: {stage.title}")
@@ -1990,17 +2098,22 @@ class AgentWorker:
                     print("[PLANNER] recomputed cube plan")
                 if "synthesis" in stage.title.lower():
                     print("[SYNTHESIS] generating cube files")
-            self._run_workflow_stage(task, workflow, default_agent_name, llm_plan, current_stage_index, stage)
+            stage_result = self._run_workflow_stage(task, workflow, default_agent_name, llm_plan, current_stage_index, stage)
+            triggered_implementation_task_count += int(stage_result.get("triggered_implementation_task_count", 0))
+            implementation_stage_empty_count += int(stage_result.get("implementation_stage_empty_count", 0))
             executed_stage_count += 1
             current_stage_index += 1
-            if not uses_explicit_review:
+            if not uses_explicit_review and not requires_file_changes:
                 break
 
         return {
             "paused_for_review": False,
             "completed_all_stages": current_stage_index >= len(stages),
             "uses_explicit_review": uses_explicit_review,
+            "requires_file_changes": requires_file_changes,
             "executed_stage_count": executed_stage_count,
+            "triggered_implementation_task_count": triggered_implementation_task_count,
+            "implementation_stage_empty_count": implementation_stage_empty_count,
             "next_stage_index": current_stage_index if current_stage_index < len(stages) else None,
         }
 
@@ -2012,7 +2125,7 @@ class AgentWorker:
         llm_plan: dict[str, Any],
         stage_index: int,
         stage: Any,
-    ) -> None:
+    ) -> dict[str, int]:
         stage_id = workflow.steps[stage_index].id if stage_index < len(workflow.steps) else stage.title
         nodes = self._ordered_stage_nodes(workflow, stage.nodes, llm_plan.get("first_node_id"))
         self.task_repository.add_event(
@@ -2113,6 +2226,7 @@ class AgentWorker:
                     ),
                 )
         triggered_tasks = []
+        implementation_stage_empty_count = 0
         if self._is_implementation_trigger_stage(stage_id, nodes):
             triggered_tasks = self._trigger_implementation_tasks(
                 task,
@@ -2120,6 +2234,8 @@ class AgentWorker:
                 stage_id=stage_id,
                 stage_index=stage_index,
             )
+            if not triggered_tasks:
+                implementation_stage_empty_count = 1
         self.task_repository.add_event(
             task["id"],
             "workflow_stage_completed",
@@ -2134,9 +2250,26 @@ class AgentWorker:
                 "command_results": command_results,
             },
         )
+        return {
+            "triggered_implementation_task_count": len(triggered_tasks),
+            "implementation_stage_empty_count": implementation_stage_empty_count,
+        }
 
     def _workflow_uses_explicit_review_stages(self, workflow: WorkflowDefinition, stages: list[Any]) -> bool:
-        return any(self._stage_requires_human_review(workflow, index, stage) for index, stage in enumerate(stages))
+        return any(
+            self._stage_requires_human_review(workflow, index, stage)
+            or self._stage_requires_question_step(workflow, index, stage)
+            for index, stage in enumerate(stages)
+        )
+
+    def _workflow_requires_file_changes(self, workflow: WorkflowDefinition, stages: list[Any]) -> bool:
+        return any(
+            self._is_implementation_trigger_stage(
+                workflow.steps[index].id if index < len(workflow.steps) else stage.title,
+                stage.nodes,
+            )
+            for index, stage in enumerate(stages)
+        )
 
     def _workspace_audit_action(self, node: WorkflowNode) -> str | None:
         candidates = [node.id, node.borg_name, node.role]
@@ -2190,6 +2323,16 @@ class AgentWorker:
                 candidates.extend([workflow_task.id, workflow_task.title, workflow_task.prompt])
         normalized = " ".join(str(candidate or "").lower() for candidate in candidates)
         return "human-review" in normalized or "human review" in normalized
+
+    def _stage_requires_question_step(self, workflow: WorkflowDefinition, stage_index: int, stage: Any) -> bool:
+        stage_id = workflow.steps[stage_index].id if stage_index < len(workflow.steps) else stage.title
+        candidates = [stage_id, stage.title]
+        for node in stage.nodes:
+            candidates.extend([node.id, node.borg_name, node.role])
+            for workflow_task in node.tasks:
+                candidates.extend([workflow_task.id, workflow_task.title, workflow_task.prompt])
+        normalized = " ".join(str(candidate or "").lower() for candidate in candidates)
+        return "question-step" in normalized or "question step" in normalized
 
     def _run_node_command_gates(
         self,
@@ -2306,7 +2449,7 @@ class AgentWorker:
             completed = subprocess.run(
                 command.run,
                 cwd=str(cwd),
-                env={**os.environ, **env},
+                env={**os.environ, "PATH": f"{Path(sys.executable).parent}{os.pathsep}{os.environ.get('PATH', '')}", **env},
                 shell=True,
                 capture_output=True,
                 text=True,
@@ -2571,36 +2714,75 @@ class AgentWorker:
         plan: dict[str, Any],
         workcube_context: dict[str, Any] | None = None,
     ) -> str:
-        lines: list[str] = []
+        planned_changes: list[str] = []
+        review_questions: list[str] = []
         if workcube_context and workcube_context.get("workcube_missing_detected"):
-            lines.extend(
-                [
-                    "Automatic analysis:",
-                    "- Missing borg-cube.md detected: yes",
-                    f"- borg-cube.md created: {'yes' if workcube_context.get('workcube_created') else 'no'}",
-                ]
-            )
             if workcube_context.get("workcube_path"):
-                lines.append(f"- Path: {workcube_context['workcube_path']}")
+                action = "Create" if workcube_context.get("workcube_created") else "Use"
+                planned_changes.append(f"{action} borg-cube.md at {workcube_context['workcube_path']}.")
             if workcube_context.get("workcube_creation_reason"):
-                lines.append(f"- Reason: {workcube_context['workcube_creation_reason']}")
+                planned_changes.append(f"Use ownership decision: {workcube_context['workcube_creation_reason']}")
             if workcube_context.get("workcube_creation_error"):
-                lines.append(f"- Error: {workcube_context['workcube_creation_error']}")
-            lines.append("")
+                review_questions.append(f"How should the borg-cube.md update proceed after this error: {workcube_context['workcube_creation_error']}?")
+
         for iteration in plan.get("iterations", []):
             if not isinstance(iteration, dict):
                 continue
-            iteration_id = iteration.get("iteration")
             output = str(iteration.get("output") or "")
-            lines.append(f"Iteration {iteration_id}")
-            lines.append("Response:")
-            lines.append(output)
-            lines.append("")
+            parsed = _parse_json_object(output)
+            planned_changes.extend(self._planned_changes_from_parsed_output(parsed))
+            review_questions.extend(self._review_questions_from_parsed_output(parsed))
+
         summary = str(plan.get("summary") or "").strip()
-        if summary:
-            lines.append("Summary:")
-            lines.append(summary)
+        if summary and not planned_changes:
+            planned_changes.append(_truncate_sentence(summary))
+        if not planned_changes:
+            planned_changes.append("Continue the selected workflow stage with the current task scope.")
+        if not review_questions:
+            review_questions.append(f"Is this planned change correct for the next workflow stage: {planned_changes[0]}?")
+
+        lines = ["Review Required", "", "Planned Changes"]
+        lines.extend(f"- {item}" for item in _dedupe_nonempty(planned_changes)[:5])
+        lines.extend(["", "Review Questions"])
+        lines.extend(f"- {item}" for item in _dedupe_nonempty(review_questions)[:5])
         return "\n".join(lines).strip()
+
+    def _planned_changes_from_parsed_output(self, parsed: dict[str, Any]) -> list[str]:
+        changes: list[str] = []
+        first_node_id = str(parsed.get("first_node_id") or "").strip()
+        if first_node_id:
+            changes.append(f"Start workflow execution at node `{first_node_id}`.")
+        for spec in parsed.get("borg_cube_specs") or []:
+            if isinstance(spec, dict) and spec.get("spec_path"):
+                title = str(spec.get("title") or "borg-cube specification").strip()
+                changes.append(f"Store borg-cube spec `{spec['spec_path']}` for {title}.")
+        for task in parsed.get("implementation_tasks") or []:
+            if isinstance(task, dict):
+                title = str(task.get("title") or task.get("id") or "implementation task").strip()
+                changes.append(f"Queue implementation task: {title}.")
+        for file_entry in parsed.get("project_files") or []:
+            if isinstance(file_entry, dict) and file_entry.get("path"):
+                changes.append(f"Create or update project file `{file_entry['path']}`.")
+        summary = str(parsed.get("summary") or "").strip()
+        if summary and not changes:
+            changes.append(_truncate_sentence(summary))
+        return changes
+
+    def _review_questions_from_parsed_output(self, parsed: dict[str, Any]) -> list[str]:
+        questions: list[str] = []
+        for key in ("review_questions", "questions", "open_questions"):
+            raw_questions = parsed.get(key) or []
+            if isinstance(raw_questions, str):
+                raw_questions = [raw_questions]
+            for question in raw_questions:
+                text = _truncate_sentence(str(question or ""))
+                if text:
+                    questions.append(text if text.endswith("?") else f"{text}?")
+        for assumption in parsed.get("assumptions") or []:
+            text = _truncate_sentence(str(assumption or ""))
+            if text:
+                questions.append(f"Is this assumption correct: {text}?")
+        return questions
 
 
 def _call_mcp(base_url: str, tool_name: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -2640,6 +2822,28 @@ def _parse_json_object(value: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _truncate_sentence(value: str, limit: int = 220) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
+
+
+def _dedupe_nonempty(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        text = _truncate_sentence(value)
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(text)
+    return result
 
 
 def _clean_text(value: Any) -> str | None:
@@ -2765,7 +2969,6 @@ def _is_file_access_blocker_error(exc: Exception) -> bool:
         "tool approval loop detected",
         "requires approval",
         "[tool_error]",
-        "claude code timed out",
         "working directory does not exist",
         "no such file or directory",
         "file not found",

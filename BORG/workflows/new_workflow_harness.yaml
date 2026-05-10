@@ -214,17 +214,19 @@ nodes:
               sys.exit(1 if bad else 0)"
             timeout_seconds: 120
   - id: workflow-handoff
-    borg_name: Workflow Review Handoff
+    borg_name: Workflow Review Required
     role: reviewer
     agent: borg-requirement-node
     tasks:
       - id: review-workflow-output
-        title: Review workflow outputs and residual risks
+        title: Review Required for workflow outputs
         prompt: >-
-          Review the generated workflow files, command-gate logs, remaining
-          ambiguity, and follow-up work such as prompt extraction, manifests, or
-          Git automation. Produce a compact handoff with findings and next
-          actions.
+          Produce Review Required output with only Planned Changes and Review
+          Questions. Planned Changes must cover generated workflow files,
+          command-gate results, remaining ambiguity, manifests, and Git
+          automation decisions. Review Questions must be concrete decisions
+          needed from the developer. Do not include summaries, internal
+          reasoning, or generic review text.
         status: draft
 steps:
   - id: intake-phase
@@ -273,7 +275,7 @@ steps:
     nodes:
       - workflow-validation
   - id: handoff-phase
-    title: Workflow review handoff
+    title: Review Required
     mode: sequential
     nodes:
       - workflow-handoff

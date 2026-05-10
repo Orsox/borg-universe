@@ -176,6 +176,12 @@ class ClaudeCodeClient:
         env["BORG_AGENTS_ROOT"] = str(self.settings.agents_root)
         env["BORG_SKILLS_ROOT"] = str(self.settings.skills_root)
         env["BORG_CLAUDE_PROJECT_ROOT"] = str(self.workspace.project_root)
+        
+        # Git safety override to prevent "Not a git repository" errors when running as root in container
+        env["GIT_CONFIG_COUNT"] = "1"
+        env["GIT_CONFIG_KEY_0"] = "safe.directory"
+        env["GIT_CONFIG_VALUE_0"] = "*"
+        
         return env
 
     def _build_command(self, prompt: str) -> list[str]:
@@ -256,11 +262,33 @@ def _append_permission_args(command: list[str]) -> None:
 
 
 def _parse_json_object(value: str) -> dict[str, Any]:
+    if not value:
+        return {}
+    # Try direct parse
     try:
         parsed = json.loads(value)
+        if isinstance(parsed, dict):
+            return parsed
     except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+        pass
+
+    # Try to extract JSON from code blocks or anywhere in the text
+    import re
+    # Look for JSON in triple backticks (markdown)
+    json_blocks = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", value, re.DOTALL)
+    if not json_blocks:
+        # Look for the last { ... } block in the text
+        json_blocks = re.findall(r"(\{.*\})", value, re.DOTALL)
+
+    for block in reversed(json_blocks):
+        try:
+            parsed = json.loads(block)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            continue
+    
+    return {}
 
 
 def _extract_content(payload: dict[str, Any]) -> str:

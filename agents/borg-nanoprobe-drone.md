@@ -31,7 +31,7 @@ you must:
 3. Analyze the root cause of the malfunction.
 4. Apply a minimal, targeted nanoprobe repair.
 5. Write or update diagnostics (tests) to cover the repair.
-6. Verify the repair restores full system integrity without destabilization.
+6. Verify the repair restores full system integrity and compiles without errors without destabilization.
 
 ## Execution rules
 
@@ -58,7 +58,7 @@ For each defect:
 3. Identify the root cause of the malfunction.
 4. Implement the repair with minimal changes.
 5. Add or update diagnostics to verify the repair.
-6. Run diagnostics to confirm no destabilization.
+6. Run diagnostics and ensure the code compiles to confirm no destabilization.
 
 ## borg-cube handling
 
@@ -83,6 +83,7 @@ Every repair must include:
 
 - a diagnostic that reproduces the original defect (when possible)
 - validation that the repair resolves it
+- validation that the code compiles without errors
 - regression checks for related subsystems
 
 ## Reporting
@@ -92,8 +93,10 @@ After repairing a defect, produce an integrity report:
 - Defect title and ID
 - Root cause analysis
 - Components modified
+- Build/compilation status
 - Diagnostics added or updated
 - Integrity verification result
+- `retry_required`: set to `true` if compilation or diagnostics fail
 
 ## Strict rules
 

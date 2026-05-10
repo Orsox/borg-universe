@@ -6,6 +6,7 @@ from pathlib import Path
 from app.core.config import Settings
 from app.db.repositories import ArtifactRepository, TaskRepository
 from app.db.supabase_client import SupabaseRestError
+from app.services.claude_code_client import ClaudeCodeClientError
 from app.services.agent_worker import AgentWorker
 from app.services.orchestration_settings_store import (
     AgentSelectionSettings,
@@ -70,6 +71,12 @@ class FakeClaudeCodeClient:
         }
 
 
+class TimeoutClaudeCodeClient(FakeClaudeCodeClient):
+    def send_prompt(self, prompt: str) -> dict[str, object]:
+        self.prompts.append(prompt)
+        raise ClaudeCodeClientError("Claude Code timed out after 120 seconds")
+
+
 def test_worker_uses_web_parallelism_and_runs_workflow_nodes_in_order(tmp_path: Path) -> None:
     workflows_root = tmp_path / "workflows"
     workflows_root.mkdir()
@@ -131,7 +138,7 @@ steps:
     processed = worker.process_next_batch()
 
     assert processed == 2
-    assert [task["status"] for task in client.tables["tasks"]] == ["review_required", "review_required", "queued"]
+    assert [task["status"] for task in client.tables["tasks"]] == ["done", "done", "queued"]
     t1_invocations = [
         event
         for event in client.tables["task_events"]
@@ -162,7 +169,9 @@ steps:
         if event.get("task_id") == "t1" and event["event_type"] == "llm_processing_completed"
     )
     assert "human_review_text" in completed_event["payload"]
-    assert "Iteration 1" in completed_event["payload"]["human_review_text"]
+    assert "Review Required" in completed_event["payload"]["human_review_text"]
+    assert "Planned Changes" in completed_event["payload"]["human_review_text"]
+    assert "Review Questions" in completed_event["payload"]["human_review_text"]
     first_node_event = next(
         event
         for event in client.tables["task_events"]
@@ -235,7 +244,7 @@ steps:
                     "id": "r1",
                     "task_id": "t1",
                     "event_type": "review_noted",
-                    "message": "Review notes were recorded.",
+                    "message": "Developer answers were recorded.",
                     "payload": {"notes": "Please keep the generated summary and continue."},
                 },
                 {
@@ -245,7 +254,7 @@ steps:
                     "message": "Local LLM processing completed; workflow node selection can begin.",
                     "payload": {
                         "summary": "Use the existing summary for the next step.",
-                        "human_review_text": "Iteration 1\nResponse:\nDraft the next step.",
+                        "human_review_text": "Review Required\n\nPlanned Changes\n- Draft the next step.\n\nReview Questions\n- Is the drafted next step correct for this workflow?",
                     },
                 },
             ],
@@ -262,10 +271,10 @@ steps:
 
     worker.process_next_batch()
 
-    assert "Human review context:" in llm.calls[0]
+    assert "Developer answer context:" in llm.calls[0]
     assert "Please keep the generated summary and continue." in llm.calls[0]
     assert "Use the existing summary for the next step." in llm.calls[0]
-    assert "Iteration 1" in llm.calls[0]
+    assert "Review Required" in llm.calls[0]
 
 
 def test_worker_keeps_local_llm_path_when_local_model_is_selected(tmp_path: Path) -> None:
@@ -406,7 +415,7 @@ steps:
     assert client.tables["project_specs"][0]["spec_path"] == "borg-cube.md"
     assert "Feature Specification" in client.tables["project_specs"][0]["content"]
     assert any(event["event_type"] == "borg_cube_specs_stored" for event in client.tables["task_events"])
-    assert client.tables["tasks"][0]["status"] == "review_required"
+    assert client.tables["tasks"][0]["status"] == "done"
 
 
 def test_worker_passes_pycharm_mcp_config_from_project_to_claude_code(
@@ -535,7 +544,7 @@ steps:
     assert "Use the PyCharm MCP file tools" in prompt_text
     assert f"Target project path on host: {str(target_project).replace(chr(92), '/')}" in prompt_text
     assert "Detected markers: pyproject.toml" in prompt_text
-    assert client.tables["tasks"][0]["status"] == "review_required"
+    assert client.tables["tasks"][0]["status"] == "done"
 
 
 def test_borg_nanoprobe_repair_prompt_requires_cube_search_and_follow_up(tmp_path: Path) -> None:
@@ -904,8 +913,8 @@ steps:
         event for event in client.tables["task_events"] if event["event_type"] == "llm_processing_completed"
     )
     assert completed_event["payload"]["workcube_missing_detected"] is True
-    assert "Automatic analysis:" in completed_event["payload"]["human_review_text"]
-    assert "Path: src/module_a/borg-cube.md" in completed_event["payload"]["human_review_text"]
+    assert "Planned Changes" in completed_event["payload"]["human_review_text"]
+    assert "src/module_a/borg-cube.md" in completed_event["payload"]["human_review_text"]
 
 
 def test_worker_prefers_worktree_path_for_claude_workspace(tmp_path: Path, monkeypatch) -> None:
@@ -1423,6 +1432,79 @@ steps:
     assert {event["task_id"] for event in child_events} == {"child-1", "child-2"}
 
 
+def test_worker_fails_implementation_workflow_without_implementation_output(tmp_path: Path) -> None:
+    workflows_root = tmp_path / "workflows"
+    workflows_root.mkdir()
+    (workflows_root / "demo.yaml").write_text(
+        """id: demo
+title: Demo
+description: Implementation workflow without generated work.
+status: draft
+entry_node: intake
+nodes:
+  - id: intake
+    borg_name: Intake
+    agent: local-llm
+    tasks:
+      - id: intake-task
+        title: Intake
+        prompt: Normalize the task.
+  - id: implementation
+    borg_name: Implementation Trigger
+    role: implementation_trigger
+    agent: borg-disassembler
+    tasks:
+      - id: trigger-implementation
+        title: Trigger implementation
+        prompt: Queue stored implementation tasks.
+steps:
+  - id: intake-phase
+    title: Intake
+    mode: sequential
+    nodes:
+      - intake
+  - id: implementation-phase
+    title: Feature implementation
+    mode: sequential
+    nodes:
+      - implementation
+""",
+        encoding="utf-8",
+    )
+    settings = _settings(tmp_path, workflows_root)
+    client = FakeSupabaseClient(
+        {
+            "tasks": [
+                {
+                    "id": "parent",
+                    "title": "Parent",
+                    "status": "queued",
+                    "workflow_id": "demo",
+                    "assigned_agent": "local-llm",
+                }
+            ],
+            "task_events": [],
+            "artifacts": [],
+        }
+    )
+    worker = AgentWorker(
+        task_repository=TaskRepository(client),  # type: ignore[arg-type]
+        artifact_repository=ArtifactRepository(client),  # type: ignore[arg-type]
+        settings=settings,
+        local_llm_client=FakeLocalLlmClient(),
+    )
+
+    result = worker.process_task(client.tables["tasks"][0])
+
+    assert result["status"] == "failed"
+    assert client.tables["tasks"][0]["status"] == "failed"
+    event_types = [event["event_type"] for event in client.tables["task_events"]]
+    assert "workflow_file_changes_missing" in event_types
+    assert "implementation_stage_empty" in event_types
+    assert "no_file_changes_applied" not in event_types
+    assert "workflow_completed" not in event_types
+
+
 def test_worker_start_implementation_bypasses_sparse_parent_project_guard(tmp_path: Path) -> None:
     workflows_root = tmp_path / "workflows"
     workflows_root.mkdir()
@@ -1670,7 +1752,7 @@ steps:
 
     worker.process_next_batch()
 
-    assert client.tables["tasks"][0]["status"] == "review_required"
+    assert client.tables["tasks"][0]["status"] == "done"
     assert len([task for task in client.tables["tasks"] if task["id"] != "t1"]) == 1
     assert client.tables["project_specs"] == []
     assert any(event["event_type"] == "borg_cube_specs_storage_failed" for event in client.tables["task_events"])
@@ -1734,7 +1816,7 @@ steps:
                     "id": "n1",
                     "task_id": "t1",
                     "event_type": "review_noted",
-                    "message": "Review notes were recorded.",
+                    "message": "Developer answers were recorded.",
                     "payload": {"notes": "Proceed with implementation and keep the scope small."},
                 },
                 {
@@ -1744,7 +1826,7 @@ steps:
                     "message": "Local LLM processing completed; workflow node selection can begin.",
                     "payload": {
                         "summary": "Existing implementation plan.",
-                        "human_review_text": "Iteration 1\nResponse:\nPlan the implementation.",
+                        "human_review_text": "Review Required\n\nPlanned Changes\n- Plan the implementation.\n\nReview Questions\n- Is the implementation plan correct for this workflow?",
                     },
                 },
                 {
@@ -2163,6 +2245,45 @@ def test_worker_requeues_task_on_temporary_dns_failure(tmp_path: Path) -> None:
     assert not any(event["event_type"] == "worker_failed" for event in client.tables["task_events"])
 
 
+def test_worker_requeues_claude_code_timeout_as_temporary_failure(tmp_path: Path) -> None:
+    workflows_root = tmp_path / "workflows"
+    workflows_root.mkdir()
+    project_root = tmp_path / "target"
+    project_root.mkdir()
+    (project_root / "CMakeLists.txt").write_text("cmake_minimum_required(VERSION 3.20)\n", encoding="utf-8")
+    settings = _settings(tmp_path, workflows_root)
+    client = FakeSupabaseClient(
+        {
+            "tasks": [
+                {
+                    "id": "t1",
+                    "title": "Task 1",
+                    "description": "Implement the requested change.",
+                    "status": "queued",
+                    "local_path": str(project_root),
+                }
+            ],
+            "task_events": [],
+            "artifacts": [],
+        }
+    )
+    worker = AgentWorker(
+        task_repository=TaskRepository(client),  # type: ignore[arg-type]
+        artifact_repository=ArtifactRepository(client),  # type: ignore[arg-type]
+        settings=settings,
+        claude_code_client=TimeoutClaudeCodeClient(project_root=str(project_root)),
+    )
+
+    result = worker.process_task(client.tables["tasks"][0])
+
+    assert result["status"] == "queued"
+    assert result["retry"] is True
+    assert client.tables["tasks"][0]["status"] == "queued"
+    assert any(event["event_type"] == "llm_processing_failed" for event in client.tables["task_events"])
+    assert any(event["event_type"] == "worker_temporary_failure_requeued" for event in client.tables["task_events"])
+    assert not any(event["event_type"] == "worker_file_access_blocked" for event in client.tables["task_events"])
+
+
 def test_worker_stops_requeue_after_temporary_failure_retry_budget(tmp_path: Path) -> None:
     workflows_root = tmp_path / "workflows"
     workflows_root.mkdir()
@@ -2399,8 +2520,8 @@ steps:
 
     result = worker.process_task(client.tables["tasks"][0])
 
-    assert result["status"] == "review_required"
-    assert client.tables["tasks"][0]["status"] == "review_required"
+    assert result["status"] == "done"
+    assert client.tables["tasks"][0]["status"] == "done"
     assert not any(event["event_type"] == "project_context_missing" for event in client.tables["task_events"])
     assert any(event["event_type"] == "llm_request" for event in client.tables["task_events"])
 

@@ -143,7 +143,7 @@ async def tasks_dashboard(
         agents = BorgRegistryRepository(client, "agents").list_items()
         skills = BorgRegistryRepository(client, "skills").list_items()
     except Exception as exc:
-        return HTMLResponse(str(exc), status_code=503)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 
     try:
         projects = project_repo.list_projects()
@@ -161,7 +161,7 @@ async def tasks_dashboard(
         {"label": "Queued", "value": counts.get("queued", 0)},
         {"label": "Running", "value": counts.get("running", 0)},
         {"label": "Review", "value": counts.get("review_required", 0)},
-        {"label": "Needs input", "value": counts.get("needs_input", 0)},
+        {"label": "Question steps", "value": counts.get("needs_input", 0)},
     ]
 
     project_labels = {project["id"]: project["name"] for project in projects}
@@ -277,6 +277,114 @@ def _latest_cube_plan(events: list[dict[str, object]]) -> list[dict[str, str]]:
     return []
 
 
+def _split_human_section(text: str, section: str) -> list[str]:
+    pattern = rf"(?im)^\s*{re.escape(section)}\s*$"
+    match = re.search(pattern, text)
+    if not match:
+        return []
+    rest = text[match.end() :]
+    next_section = re.search(r"(?im)^\s*(Planned Changes|Review Questions|Context|Questions)\s*$", rest)
+    block = rest[: next_section.start()] if next_section else rest
+    items: list[str] = []
+    for line in block.splitlines():
+        item = line.strip().lstrip("-* ").strip()
+        if item:
+            items.append(item)
+    return items
+
+
+def _short_bullet(value: str, fallback: str = "") -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return fallback
+    return text[:220].rstrip()
+
+
+def _question_from_message(message: str, fallback: str) -> str:
+    text = _short_bullet(message)
+    if not text:
+        return fallback
+    if "?" in text:
+        return text
+    lowered = text.lower()
+    for prefix in ("please provide ", "provide ", "add ", "clarify "):
+        if lowered.startswith(prefix):
+            topic = text[len(prefix) :].strip().rstrip(".")
+            return f"What is {topic}?"
+    return fallback
+
+
+def _build_human_interaction(
+    task: dict[str, Any],
+    events: list[dict[str, object]],
+    *,
+    llm_human_output: str = "",
+    llm_review: dict[str, str] | None = None,
+    workcube_context: dict[str, Any] | None = None,
+    actionable_context: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    status_value = str(task.get("status") or "")
+    if status_value not in {"review_required", "needs_input"}:
+        return None
+
+    if status_value == "needs_input":
+        message = str((actionable_context or {}).get("message") or "").strip()
+        payload = (actionable_context or {}).get("payload") or {}
+        reason = str(payload.get("reason") or "") if isinstance(payload, dict) else ""
+        context = []
+        if reason == "sparse_project_context":
+            context.append("Project context is incomplete for the selected task.")
+        elif reason == "file_access_blocker":
+            context.append("Required project files are not accessible from this environment.")
+        elif message:
+            context.append(_short_bullet(message))
+        questions = [
+            _question_from_message(
+                message,
+                "What exact input should the workflow use to continue this task?",
+            )
+        ]
+        return {
+            "kind": "question",
+            "title": "Question Step",
+            "context": context,
+            "questions": questions,
+            "notes_label": "Answers",
+            "notes_placeholder": "Answer the question(s) directly.",
+            "submit_label": "Submit answers and continue",
+        }
+
+    planned_changes = _split_human_section(llm_human_output, "Planned Changes")
+    review_questions = _split_human_section(llm_human_output, "Review Questions")
+
+    if not planned_changes:
+        if workcube_context and workcube_context.get("path"):
+            action = "Create" if workcube_context.get("created") else "Use"
+            planned_changes.append(f"{action} borg-cube.md at {workcube_context['path']}.")
+        if llm_review and llm_review.get("summary"):
+            planned_changes.append(_short_bullet(llm_review["summary"]))
+        if not planned_changes:
+            planned_changes.append(f"Continue workflow changes for task: {_short_bullet(str(task.get('title') or 'Untitled task'))}.")
+
+    if not review_questions:
+        if workcube_context and workcube_context.get("path"):
+            review_questions.append(f"Is {workcube_context['path']} the correct ownership boundary for the borg-cube.md update?")
+        elif planned_changes:
+            review_questions.append(f"Is this planned change correct for the next workflow stage: {planned_changes[0]}?")
+        else:
+            review_questions.append("What specific change is required before the next workflow stage can continue?")
+
+    return {
+        "kind": "review",
+        "title": "Review Required",
+        "planned_changes": planned_changes[:5],
+        "review_questions": review_questions[:5],
+        "notes_label": "Review Answers",
+        "notes_placeholder": "Answer each review question directly.",
+        "submit_label": "Submit review and continue",
+    }
+
+
 def _latest_human_review_input(task: dict[str, Any], events: list[dict[str, object]]) -> str:
     persisted = str(task.get("human_review_input") or "").strip()
     if persisted:
@@ -334,8 +442,8 @@ def _review_stage_state(
         payload = event.get("payload") or {}
         if not isinstance(payload, dict):
             payload = {}
-        if event_type == "workflow_review_required":
-            raw_review_index = payload.get("review_stage_index")
+        if event_type in {"workflow_review_required", "workflow_question_step"}:
+            raw_review_index = payload.get("review_stage_index") if event_type == "workflow_review_required" else payload.get("question_stage_index")
             raw_resume_index = payload.get("next_stage_index")
             try:
                 review_stage_index = int(raw_review_index)
@@ -349,8 +457,9 @@ def _review_stage_state(
                 resume_stage_index = None
             pending = {
                 "review_stage_index": review_stage_index,
-                "review_stage_id": str(payload.get("review_stage_id") or ""),
+                "review_stage_id": str(payload.get("review_stage_id") or payload.get("question_stage_id") or ""),
                 "resume_stage_index": resume_stage_index,
+                "kind": "review" if event_type == "workflow_review_required" else "question",
             }
         elif event_type == "human_review_confirmed":
             raw_review_index = payload.get("review_stage_index")
@@ -496,24 +605,19 @@ async def task_detail(
 
     # Preparation for compact review if needed
     llm_review = None
-    cube_files = []
+    llm_human_output = ""
+    human_interaction = None
     workflow_stage_options = []
     suggested_resume_stage_index = None
     human_review_input = _latest_human_review_input(task, events)
     workcube_context = _latest_workcube_context(events)
     actionable_context = _latest_actionable_context(events)
     error_context = _latest_error_context(events) if task.get("status") == "failed" else None
-    needs_input_guidance = (
-        _build_needs_input_guidance(task, actionable_context)
-        if task.get("status") == "needs_input"
-        else None
-    )
 
     if task.get("status") == "review_required":
         llm_review = _latest_llm_review(events)
         llm_transcript = _build_llm_transcript(events)
         llm_human_output = _latest_llm_human_output(events, llm_transcript, llm_review)
-        cube_files = _latest_cube_plan(events) or _extract_cube_files(llm_human_output)
         workflow_stage_options = _workflow_stage_options(workflow_store, task.get("workflow_id"))
         review_stage_state = _review_stage_state(workflow_store, repo, task_id, events)
         if review_stage_state:
@@ -521,6 +625,14 @@ async def task_detail(
             suggested_resume_stage_index = int(raw_resume_stage_index) if raw_resume_stage_index is not None else None
         else:
             suggested_resume_stage_index = _next_resume_stage_index(repo, workflow_store, task_id, events)
+    human_interaction = _build_human_interaction(
+        task,
+        events,
+        llm_human_output=llm_human_output,
+        llm_review=llm_review,
+        workcube_context=workcube_context,
+        actionable_context=actionable_context,
+    )
 
     return templates.TemplateResponse(
         request,
@@ -544,8 +656,7 @@ async def task_detail(
             "llm_review": llm_review,
             "actionable_context": actionable_context,
             "error_context": error_context,
-            "needs_input_guidance": needs_input_guidance,
-            "cube_files": cube_files,
+            "human_interaction": human_interaction,
             "human_review_input": human_review_input,
             "workcube_context": workcube_context,
             "workflow_stage_options": workflow_stage_options,
@@ -670,11 +781,6 @@ async def review_task(
     human_review_input = _latest_human_review_input(task, events)
     workcube_context = _latest_workcube_context(events)
     actionable_context = _latest_actionable_context(events)
-    needs_input_guidance = (
-        _build_needs_input_guidance(task, actionable_context)
-        if task.get("status") == "needs_input"
-        else None
-    )
     workflow_stage_options = _workflow_stage_options(workflow_store, task.get("workflow_id"))
     review_stage_state = _review_stage_state(workflow_store, repo, task_id, events)
     if task.get("status") not in {"review_required", "needs_input"} or (
@@ -686,6 +792,14 @@ async def review_task(
         int(review_stage_state.get("resume_stage_index"))
         if review_stage_state and review_stage_state.get("resume_stage_index") is not None
         else _next_resume_stage_index(repo, workflow_store, task_id, events)
+    )
+    human_interaction = _build_human_interaction(
+        task,
+        events,
+        llm_human_output=llm_human_output,
+        llm_review=llm_review,
+        workcube_context=workcube_context,
+        actionable_context=actionable_context,
     )
 
     return templates.TemplateResponse(
@@ -699,10 +813,10 @@ async def review_task(
             "llm_review": llm_review,
             "llm_transcript": llm_transcript,
             "llm_human_output": llm_human_output,
+            "human_interaction": human_interaction,
             "human_review_input": human_review_input,
             "workcube_context": workcube_context,
             "actionable_context": actionable_context,
-            "needs_input_guidance": needs_input_guidance,
             "projects": projects,
             "project_labels": project_labels,
             "workflow_labels": workflow_labels,
@@ -715,11 +829,11 @@ async def review_task(
             "supabase_configured": settings.supabase_configured,
             "mcp_configured": bool(settings.mcp_server_url),
             "review_actions": [
-                {"value": "save", "label": "Review speichern"},
-                {"value": "confirm", "label": "Review absenden und fortsetzen"},
-                {"value": "start_implementation", "label": "Implementierung starten"},
-                {"value": "request_changes", "label": "Aenderungen anfordern"},
-                {"value": "cancel", "label": "Task abbrechen"},
+                {"value": "save", "label": "Save"},
+                {"value": "confirm", "label": "Submit and continue"},
+                {"value": "start_implementation", "label": "Start implementation"},
+                {"value": "request_changes", "label": "Request changes"},
+                {"value": "cancel", "label": "Cancel task"},
             ],
             "workflow_stage_options": workflow_stage_options,
             "suggested_resume_stage_index": suggested_resume_stage_index,
@@ -782,7 +896,7 @@ async def submit_task_review(
         repo.add_event(
             task_id,
             "review_noted",
-            "Review notes were recorded.",
+            "Developer answers were recorded.",
             {"notes": review_notes, "human_review_input": review_notes, **(workcube_context or {})},
         )
 
@@ -1256,6 +1370,7 @@ def _latest_actionable_context(events: list[dict[str, object]]) -> dict[str, Any
         "input_requested",
         "review_required",
         "workflow_review_required",
+        "workflow_question_step",
         "llm_processing_failed",
         "worker_failed",
     }
@@ -1275,63 +1390,3 @@ def _latest_actionable_context(events: list[dict[str, object]]) -> dict[str, Any
             "payload": payload if isinstance(payload, dict) else {},
         }
     return None
-
-
-def _build_needs_input_guidance(
-    task: dict[str, object],
-    actionable_context: dict[str, Any] | None,
-) -> dict[str, object]:
-    event_type = str((actionable_context or {}).get("event_type") or "")
-    payload = (actionable_context or {}).get("payload") or {}
-    reason = ""
-    if isinstance(payload, dict):
-        reason = str(payload.get("reason") or payload.get("error") or "").strip()
-
-    summary = "The worker is paused and needs human input before it can continue."
-    steps = [
-        "Read the latest worker context to see what is missing.",
-        "Update task fields if metadata is incorrect (path, platform, board, or title).",
-        "Write the answer or decision in Review notes.",
-        "Click Confirm and continue to resume processing.",
-    ]
-
-    if event_type == "project_context_missing" or reason == "sparse_project_context":
-        summary = "Project context is incomplete, so the worker cannot derive the next implementation step."
-        steps = [
-            "Check Local path and ensure it points to the correct project root.",
-            "Add the missing context in Review notes (project structure, goal, and constraints).",
-            "Update Platform/MCU/Board fields if they are empty or wrong.",
-            "Click Confirm and continue to rerun with the new context.",
-        ]
-    elif reason == "file_access_blocker":
-        summary = "The worker could not access required files."
-        steps = [
-            "Verify Local path exists and is reachable from this environment.",
-            "Confirm the required files are present in that path.",
-            "Document what was fixed or where the files are in Review notes.",
-            "Click Confirm and continue to retry.",
-        ]
-    elif event_type == "input_requested":
-        summary = "A direct question from the workflow is waiting for your answer."
-        steps = [
-            "Read the worker message and details to capture the exact question.",
-            "Answer the question clearly in Review notes.",
-            "Adjust task fields only if the answer changes project metadata.",
-            "Click Confirm and continue to pass your answer to the workflow.",
-        ]
-    elif event_type in {"llm_processing_failed", "worker_failed"}:
-        summary = "Execution failed and needs a human decision for the next retry."
-        steps = [
-            "Inspect error details in Current worker context.",
-            "Provide a corrective instruction in Review notes.",
-            "Apply any needed metadata fixes directly in the form.",
-            "Click Confirm and continue to retry with your guidance.",
-        ]
-
-    return {
-        "title": "Human input required",
-        "summary": summary,
-        "steps": steps,
-        "primary_action_label": "Provide input now",
-        "primary_action_href": f"/tasks/{task.get('id')}/review",
-    }

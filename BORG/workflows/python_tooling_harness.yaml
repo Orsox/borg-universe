@@ -125,13 +125,18 @@ nodes:
             run: python -m compileall .
             timeout_seconds: 300
   - id: python-review
-    borg_name: Python Review
+    borg_name: Python Review Required
     role: reviewer
     agent: borg-requirement-node
     tasks:
       - id: review-python-output
-        title: Review Python outputs
-        prompt: Review code changes, command-gate logs, and remaining Python risks.
+        title: Review Required for Python outputs
+        prompt: >-
+          Produce Review Required output with only Planned Changes and Review
+          Questions. Planned Changes must cover affected Python modules, command
+          behavior, public interfaces, validation status, and risks. Review
+          Questions must be concrete decisions needed from the developer. Do not
+          include summaries, internal reasoning, or generic review text.
         status: draft
 steps:
   - id: intake-phase
@@ -169,7 +174,7 @@ steps:
     nodes:
       - python-validation
   - id: review-phase
-    title: Human review handoff
+    title: Review Required
     mode: sequential
     nodes:
       - python-review

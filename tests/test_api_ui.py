@@ -156,12 +156,12 @@ def test_root_shows_needs_input_tasks_before_review_queue(monkeypatch) -> None:
     response = client.get("/")
 
     assert response.status_code == 200
-    assert "Input required" in response.text
+    assert "Question steps" in response.text
     assert "First input" in response.text
     assert "Second input" in response.text
     assert "/tasks/input-old/review" in response.text
     assert response.text.index("First input") < response.text.index("Second input")
-    assert response.text.index("Input required") < response.text.index("Review required")
+    assert response.text.index("Question steps") < response.text.index("Review required")
     assert 'window.location.reload()' in response.text
 
 
@@ -859,7 +859,7 @@ def test_workflows_page_renders_yaml_workflow() -> None:
 
     assert response.status_code == 200
     assert "Workflow collective" in response.text
-    assert "Assimilation Demo" in response.text
+    assert "Borg Assimilation" in response.text
     assert "New Borg Cube Project" in response.text
     assert "Open detail" in response.text
     assert "Level 1" not in response.text
@@ -1017,9 +1017,9 @@ def test_workflow_settings_page_rejects_runtime_status_for_workflow_definition(t
 
 
 def test_html_routes_render_borg_template_for_configuration_errors(monkeypatch) -> None:
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.delenv("SUPABASE_ANON_KEY", raising=False)
-    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    monkeypatch.setenv("SUPABASE_URL", "")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "")
     get_settings.cache_clear()
     client = TestClient(create_app())
 
@@ -1196,7 +1196,7 @@ def test_tasks_page_falls_back_when_projects_table_is_unavailable(monkeypatch) -
     assert "name=\"project_id\"" in response.text
 
 
-def test_task_detail_shows_newest_history_entry_first(monkeypatch) -> None:
+def test_task_detail_hides_history_for_review_required_tasks(monkeypatch) -> None:
     fake_client = FakeSupabaseClient(
         {
             "tasks": [{"id": "t1", "title": "Task", "status": "review_required"}],
@@ -1215,8 +1215,11 @@ def test_task_detail_shows_newest_history_entry_first(monkeypatch) -> None:
     assert response.status_code == 200
     assert "<dt>Task ID</dt>" in response.text
     assert "<code>t1</code>" in response.text
-    assert response.text.index("last_step") < response.text.index("first_step")
-    assert response.text.index("Newest step") < response.text.index("Oldest step")
+    assert "Review Required" in response.text
+    assert "Planned Changes" in response.text
+    assert "Review Questions" in response.text
+    assert "last_step" not in response.text
+    assert "first_step" not in response.text
 
 
 def test_tasks_page_shows_task_id_column(monkeypatch) -> None:
@@ -1276,8 +1279,9 @@ def test_task_review_confirm_requeues_task(monkeypatch) -> None:
     assert response.headers["location"] == "/tasks/t1"
     assert fake_client.tables["tasks"][0]["status"] == "queued"
     assert fake_client.tables["tasks"][0]["pycharm_mcp_enabled"] is True
-    assert fake_client.tables["tasks"][0]["human_review_input"] == "Looks good."
     event_types = [event["event_type"] for event in fake_client.tables["task_events"]]
+    review_events = [event for event in fake_client.tables["task_events"] if event["event_type"] == "review_noted"]
+    assert review_events[0]["payload"]["notes"] == "Looks good."
     assert "review_confirmed" in event_types
     assert "workflow_resumed" in event_types
     assert "task_queued" in event_types
@@ -1430,7 +1434,7 @@ def test_task_review_start_implementation_resumes_trigger_stage(monkeypatch, tmp
 
     page = client.get("/tasks/t1/review")
     assert page.status_code == 200
-    assert "Implementierung starten" in page.text
+    assert "Start implementation" in page.text
     assert "Trigger implementation task execution" in page.text
 
     response = client.post(
@@ -1549,7 +1553,7 @@ def test_task_review_page_shows_latest_llm_summary(monkeypatch) -> None:
                     "message": "Local LLM processing completed; workflow node selection can begin.",
                     "payload": {
                         "summary": "Verify directory structure and existing main.py in D:\\\\Workbench\\\\firststart using MCP",
-                        "human_review_text": "Iteration 1\nPrompt:\nWhat should I do?\nResponse:\nPlease inspect the task.",
+                        "human_review_text": "Review Required\n\nPlanned Changes\n- Verify directory structure and existing main.py in D:\\\\Workbench\\\\firststart.\n\nReview Questions\n- Should workflow execution start with the inspected task scope?",
                     },
                     "created_at": "2026-04-12T08:00:00+00:00",
                 }
@@ -1564,9 +1568,10 @@ def test_task_review_page_shows_latest_llm_summary(monkeypatch) -> None:
     response = client.get("/tasks/t1/review")
 
     assert response.status_code == 200
-    assert "LLM summary for review" in response.text
+    assert "Review Required" in response.text
+    assert "Planned Changes" in response.text
+    assert "Review Questions" in response.text
     assert "Verify directory structure and existing main.py" in response.text
-    assert "llm_processing_completed" in response.text
 
 
 def test_task_review_page_shows_worker_context_without_llm_output(monkeypatch) -> None:
@@ -1593,13 +1598,9 @@ def test_task_review_page_shows_worker_context_without_llm_output(monkeypatch) -
     response = client.get("/tasks/t1/review")
 
     assert response.status_code == 200
-    assert "Current worker context" in response.text
-    assert "Project directory contains no source/build markers." in response.text
-    assert "project_context_missing" in response.text
-    assert "LLM transcript" in response.text
-    assert "What should I do?" in response.text
-    assert "Please inspect the task." in response.text
-    assert "LLM output for review" in response.text
+    assert "Review Required" in response.text
+    assert "Planned Changes" in response.text
+    assert "Review Questions" in response.text
 
 
 def test_task_detail_shows_workcube_analysis_and_human_review_input(monkeypatch) -> None:
@@ -1639,9 +1640,10 @@ def test_task_detail_shows_workcube_analysis_and_human_review_input(monkeypatch)
     response = client.get("/tasks/t1")
 
     assert response.status_code == 200
-    assert "Automatische Analyse" in response.text
+    assert "Review Required" in response.text
+    assert "Planned Changes" in response.text
+    assert "Review Questions" in response.text
     assert "docs/borg-cube.md" in response.text
-    assert "Menschliches Review und Einschaetzung" in response.text
     assert "Bitte bei docs gegenpruefen." in response.text
 
 
@@ -1682,13 +1684,14 @@ def test_task_review_page_shows_workcube_analysis_and_saved_review(monkeypatch) 
     response = client.get("/tasks/t1/review")
 
     assert response.status_code == 200
-    assert "Automatische Analyse" in response.text
+    assert "Review Required" in response.text
+    assert "Planned Changes" in response.text
+    assert "Review Questions" in response.text
     assert "src/core/borg-cube.md" in response.text
-    assert "Menschliches Review und Einschaetzung" in response.text
     assert "Bitte Modulgrenzen pruefen." in response.text
 
 
-def test_task_detail_shows_needs_input_guidance_and_cta(monkeypatch) -> None:
+def test_task_detail_shows_question_step_and_cta(monkeypatch) -> None:
     fake_client = FakeSupabaseClient(
         {
             "tasks": [{"id": "t1", "title": "Task", "status": "needs_input", "description": "Needs details"}],
@@ -1712,8 +1715,8 @@ def test_task_detail_shows_needs_input_guidance_and_cta(monkeypatch) -> None:
     response = client.get("/tasks/t1")
 
     assert response.status_code == 200
-    assert "Human input required" in response.text
-    assert "Provide input now" in response.text
+    assert "Question Step" in response.text
+    assert "Questions" in response.text
     assert "/tasks/t1/review" in response.text
 
 
@@ -1741,15 +1744,15 @@ def test_task_review_page_allows_needs_input_and_shows_guidance(monkeypatch) -> 
     response = client.get("/tasks/t1/review")
 
     assert response.status_code == 200
-    assert "Human input required" in response.text
+    assert "Question Step" in response.text
     assert "Project context is incomplete" in response.text
-    assert "Review absenden und fortsetzen" in response.text
+    assert "Submit answers and continue" in response.text
 
 
 def test_api_routes_keep_json_errors_for_configuration_errors(monkeypatch) -> None:
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.delenv("SUPABASE_ANON_KEY", raising=False)
-    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    monkeypatch.setenv("SUPABASE_URL", "")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "")
     get_settings.cache_clear()
     client = TestClient(create_app())
 

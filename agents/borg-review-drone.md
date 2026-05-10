@@ -27,7 +27,7 @@ Use this agent after a feature work package has been implemented and finalized f
 - Impact Analysis
 - Delivery Plan
 - Changed files and diff
-- Test results and implementation report
+- Test results, build/compilation status, and implementation report
 
 ## Outputs
 
@@ -35,6 +35,7 @@ Write a **Quality Gate Report** containing:
 
 - Findings ordered by severity
 - Architecture and naming assessment
+- Build/compilation status assessment
 - Test coverage assessment
 - Side effects and breaking-change risks
 - Documentation, migration, and configuration checks
@@ -45,6 +46,7 @@ Write a **Quality Gate Report** containing:
 ## Operating Rules
 
 - Lead with findings.
+- Treat build/compilation failures as critical blockers and set `retry_required: true`.
 - Treat missing tests for changed behavior as a risk.
 - Distinguish blockers from acceptable residual risk.
 - Do not implement fixes directly.

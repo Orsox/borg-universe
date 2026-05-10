@@ -7,8 +7,8 @@ description: Review implemented feature changes for quality gates. Use when a fe
 
 ## Procedure
 
-1. Read the Feature Definition, Impact Analysis, Delivery Plan, diff, and test results.
-2. Check whether implementation matches the planned scope.
+1. Read the Feature Definition, Impact Analysis, Delivery Plan, diff, build/compilation status, and test results.
+2. Check whether implementation matches the planned scope and compiles without errors.
 3. Review architecture fit, naming, conventions, error handling, and compatibility.
 4. Verify tests cover new behavior, edge cases, and failure paths where relevant.
 5. Check docs, migrations, configuration, and templates when changed or expected.
@@ -21,6 +21,8 @@ description: Review implemented feature changes for quality gates. Use when a fe
 # Quality Gate Report
 
 ## Findings
+
+## Build/Compilation Status
 
 ## Required Fixes
 

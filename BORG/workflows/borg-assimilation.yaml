@@ -65,20 +65,20 @@ nodes:
           - Return corrected borg_cube_specs if fixes are required
         status: draft
   - id: human-review-node
-    borg_name: Human Review Phase
+    borg_name: Human Review Required
     role: reviewer
     agent: borg-requirement-node
     tasks:
       - id: human-review-handoff
-        title: Compact User Review & Validation
+        title: Review Required handoff
         prompt: >-
-          Goal: Produce Compact Review Output for user validation
-          Scope: Reviewed specifications and Cube file preview
+          Goal: Produce Review Required output for human decision-making
+          Scope: Reviewed specifications and planned borg-cube changes
           Constraints:
-          - Max 3 bullets for Summary
-          - MANDATORY Cube Files Preview
-          - Single Review Decision field (Label: Review Decision (Required))
-          - Perform Adaptive Agent & Skill Adjustment after feedback
+          - Output only Planned Changes and Review Questions
+          - Planned Changes must list affected specs, behavior, interfaces, risks, and decisions
+          - Review Questions must be concrete and directly answerable
+          - Do not include summaries, cube previews, internal reasoning, or review filler
         status: draft
   - id: post-review-planner
     borg_name: Post-Review Planning Update
@@ -86,12 +86,12 @@ nodes:
     agent: borg-requirement-node
     tasks:
       - id: update-plan-after-review
-        title: Merge human review and update synthesis plan
+        title: Merge review answers and update synthesis plan
         prompt: >-
-          Goal: Merge authoritative human review into the execution plan
+          Goal: Merge authoritative review answers into the execution plan
           Scope: borg_cube_specs, protected modules, and required cube files
           Constraints:
-          - Treat human review as authoritative
+          - Treat review answers as authoritative
           - Recompute required borg-cube.md outputs before synthesis
           - Ensure requested protected-module specs are included in the plan
         status: draft
@@ -106,7 +106,7 @@ nodes:
           Goal: Synthesize required Cube files (cube-*.json and cube-*.md)
           Scope: All identified agents, skills, and project structure
           Constraints:
-          - Follow human review preview exactly
+          - Follow approved planned changes exactly
           - Machine-readable JSON, human-readable MD
           - Respect protected folders (e.g. /src/stm_cubemx/)
         status: draft
@@ -144,7 +144,7 @@ steps:
       target_node: git-prepare-architecture
       message: 'Specification issues found. Regenerate the project and module borg_cube_specs based on this review: {{nodes[''requirement-node''].output.errors}}'
   - id: human-review
-    title: Human-in-the-Loop Review
+    title: Review Required
     mode: sequential
     nodes:
       - human-review-node

@@ -80,10 +80,11 @@ nodes:
           Execute exactly one approved feature work package in the prepared task
           workspace. The implementation prompt must start with <nano-implant>.
           Follow existing project conventions, keep scope limited to the work
-          package, update or create tests, update technical documentation, and
-          generate migration, configuration, or template files only when the
-          plan requires them. Stop and report if the workspace metadata, plan,
-          or dependencies are inconsistent.
+          package, update or create tests, ensure the code compiles without
+          errors, update technical documentation, and generate migration,
+          configuration, or template files only when the plan requires them.
+          Stop and report if the workspace metadata, plan, or dependencies are
+          inconsistent.
         status: draft
 
   - id: git-finalize-feature-task
@@ -110,10 +111,11 @@ nodes:
         prompt: >-
           Review the feature diff against the Feature Definition, Impact
           Analysis, and Delivery Plan. Check architecture fit, naming,
-          convention usage, test coverage, side effects, documentation,
-          migrations, configuration changes, security, and breaking changes.
-          Produce findings ordered by severity, required fixes, residual risks,
-          and manual verification steps.
+          convention usage, test coverage, build/compilation status,
+          target-validation evidence, side effects, documentation, migrations,
+          configuration changes, security, and breaking changes. Produce
+          findings ordered by severity, required fixes, residual risks, and
+          manual verification steps.
         status: draft
         commands:
           - id: validate-workflow-yaml-shape
@@ -130,6 +132,31 @@ nodes:
               sys.exit(1 if missing or unknown else 0)"
             timeout_seconds: 120
 
+  - id: feature-target-validation
+    borg_name: Borg Target Validation Drone
+    role: verifier
+    agent: borg-programming-node
+    tasks:
+      - id: validate-feature-on-target
+        title: Program target and validate feature behavior on hardware
+        prompt: >-
+          Use the project CLAUDE.md section borg-programming-node as the primary
+          source for target programming and hardware test procedure. If that
+          section is absent, fall back to borg-cube.md,
+          docs/PYTHON_EMBEDDED_HARNESS.md, repository scripts, build files, and
+          adjacent documentation. Determine the exact target, programming
+          command, runtime verification command, required environment variables,
+          and operator prerequisites for the implemented work package. Require
+          successful deterministic validation before hardware-near actions.
+          Execute the target test only when the target is connected and
+          explicit approval for hardware-near actions is available; otherwise
+          report a blocker with exact commands, manual steps, and missing
+          prerequisites. Never invent a flashing flow, never claim target
+          validation passed without recorded evidence, and produce a compact
+          target report with commands, observed behavior, artifact paths, and
+          retry_required when programming or runtime verification fails.
+        status: draft
+
   - id: feature-handover
     borg_name: Borg Handover Drone
     role: handover
@@ -139,10 +166,11 @@ nodes:
         title: Produce feature handover and PR text
         prompt: >-
           Produce the final handover from the Feature Definition, Impact
-          Analysis, Delivery Plan, implementation report, validation logs, and
-          quality-gate findings. Include change summary, affected components,
-          test status, open points, deployment or migration notes, manual
-          verification, and a concise PR description or merge text.
+          Analysis, Delivery Plan, implementation report, validation logs,
+          target-validation evidence, and quality-gate findings. Include change
+          summary, affected components, test status, open points, deployment or
+          migration notes, manual verification, and a concise PR description or
+          merge text.
         status: draft
 
 steps:
@@ -172,6 +200,17 @@ steps:
       - feature-implementation
       - git-finalize-feature-task
 
+  - id: target-validation-phase
+    title: Target hardware validation
+    mode: sequential
+    nodes:
+      - feature-target-validation
+    retry:
+      condition: nodes['feature-target-validation'].output.retry_required == true
+      max_attempts: 10
+      target_node: git-prepare-feature-task
+      message: 'Target validation failed. Re-run implementation for the affected work package using these findings: {{nodes[''feature-target-validation''].output.findings}}'
+
   - id: quality-phase
     title: Review and quality gate
     mode: sequential
@@ -179,7 +218,7 @@ steps:
       - feature-quality-gate
     retry:
       condition: nodes['feature-quality-gate'].output.retry_required == true
-      max_attempts: 2
+      max_attempts: 10
       target_node: git-prepare-feature-task
       message: 'Quality gate requires fixes. Re-run implementation for the affected work package using these findings: {{nodes[''feature-quality-gate''].output.findings}}'
 

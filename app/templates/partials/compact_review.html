@@ -1,85 +1,70 @@
-<div class="section panel">
+{% if human_interaction %}
+<div class="section panel human-interaction">
   <div class="panel-header">
-    <h2>Review Required</h2>
+    <h2>{{ human_interaction.title }}</h2>
     <span class="badge {{ task.status|badge_class }}">{{ task.status }}</span>
   </div>
   <div class="panel-body">
-    {% if workcube_context %}
-    <div class="callout compact-workcube-analysis">
-      <strong>Automatische Analyse</strong>
-      <p>
-        {% if workcube_context.missing_detected %}
-        Fehlende `borg-cube.md` erkannt.
-        {% else %}
-        Borg-Cube-Analyse vorhanden.
-        {% endif %}
-        {% if workcube_context.created %}
-        Es wurde automatisch eine neue `borg-cube.md` angelegt.
-        {% else %}
-        Es konnte keine neue `borg-cube.md` angelegt werden.
-        {% endif %}
-      </p>
-      {% if workcube_context.path %}
-      <p><strong>Pfad:</strong> <code>{{ workcube_context.path }}</code></p>
-      {% endif %}
-      {% if workcube_context.reason %}
-      <p><strong>Begruendung:</strong> {{ workcube_context.reason }}</p>
-      {% endif %}
-      {% if workcube_context.error %}
-      <p><strong>Fehler:</strong> {{ workcube_context.error }}</p>
-      {% endif %}
-    </div>
-    {% endif %}
-
-    <div class="callout compact-review-summary">
-      <strong>Zusammenfassung</strong>
-      {% if llm_review %}
-      <p>{{ llm_review.summary }}</p>
-      {% else %}
-      <p>Es liegt noch keine Zusammenfassung vor.</p>
-      {% endif %}
-    </div>
-
-    <div class="callout compact-cube-preview">
-      <strong>Geplanter Cube-Output</strong>
-      {% if cube_files %}
-      <ul class="cube-file-list">
-        {% for file in cube_files %}
-        <li><code>{{ file.name }}</code> -> {{ file.description }}</li>
+    {% if human_interaction.kind == "review" %}
+    <section>
+      <h3>Planned Changes</h3>
+      <ul>
+        {% for item in human_interaction.planned_changes %}
+        <li>{{ item }}</li>
         {% endfor %}
       </ul>
-      {% else %}
-      <p>Es wurden keine weiteren Cube-Dateien fuer die Aktualisierung erkannt.</p>
+    </section>
+    <section>
+      <h3>Review Questions</h3>
+      <ul>
+        {% for item in human_interaction.review_questions %}
+        <li>{{ item }}</li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% else %}
+      {% if human_interaction.context %}
+      <section>
+        <h3>Context</h3>
+        <ul>
+          {% for item in human_interaction.context %}
+          <li>{{ item }}</li>
+          {% endfor %}
+        </ul>
+      </section>
       {% endif %}
-    </div>
+      <section>
+        <h3>Questions</h3>
+        <ul>
+          {% for item in human_interaction.questions %}
+          <li>{{ item }}</li>
+          {% endfor %}
+        </ul>
+      </section>
+    {% endif %}
 
-    <form method="post" action="/tasks/{{ task.id }}/review" onsubmit="this.querySelector('button[type=submit]').disabled = true; this.querySelector('button[type=submit]').innerHTML = 'Review committed...'; document.querySelector('.compact-review-status').style.display = 'block';">
+    <form method="post" action="/tasks/{{ task.id }}/review" onsubmit="this.querySelector('button[type=submit]').disabled = true; this.querySelector('button[type=submit]').innerHTML = 'Submitting...'; document.querySelector('.compact-review-status').style.display = 'block';">
       <input type="hidden" name="review_action" value="confirm">
       {% if suggested_resume_stage_index is not none %}
       <input type="hidden" name="resume_stage_index" value="{{ suggested_resume_stage_index }}">
       {% endif %}
-
-      <div class="form-grid">
-        <label class="full">
-          <strong>Menschliches Review und Einschaetzung</strong>
-          <textarea name="review_notes" rows="6" placeholder="Beschreiben Sie Ihre Rueckmeldung. Diese Eingabe wird gespeichert und im naechsten Workflow-Schritt an die Agenten uebergeben.">{{ human_review_input or '' }}</textarea>
-        </label>
-      </div>
-      
+      <label class="full">
+        <strong>{{ human_interaction.notes_label }}</strong>
+        <textarea name="review_notes" rows="6" placeholder="{{ human_interaction.notes_placeholder }}">{{ human_review_input or '' }}</textarea>
+      </label>
       <div class="actions">
-        <button type="submit" name="action" value="confirm">Review absenden und Workflow fortsetzen</button>
+        <button type="submit" name="action" value="confirm">{{ human_interaction.submit_label }}</button>
       </div>
-
       <div class="compact-review-status" style="display: none; margin-top: 1rem; color: var(--text-success); font-weight: bold;">
-        <span class="spinner"></span> Workflow wird mit Ihrem Review fortgesetzt...
+        <span class="spinner"></span> Continuing workflow...
       </div>
     </form>
   </div>
 </div>
+{% endif %}
 
 <style>
-.compact-review-summary p { margin-top: 0.5rem; }
-.cube-file-list { list-style: none; padding: 0; margin-top: 0.5rem; }
-.cube-file-list li { margin-bottom: 0.25rem; }
-.cube-file-list code { background: var(--bg-secondary); padding: 0.1rem 0.3rem; border-radius: 4px; font-family: monospace; }
+.human-interaction section + section { margin-top: 1rem; }
+.human-interaction ul { margin: 0.5rem 0 0; padding-left: 1.25rem; }
+.human-interaction li { margin-bottom: 0.35rem; }
 </style>

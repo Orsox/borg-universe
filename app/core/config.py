@@ -55,7 +55,16 @@ def _get_bool(name: str, default: bool = False) -> bool:
 
 
 def _get_path(name: str, default: str) -> Path:
-    return Path(os.getenv(name, default)).expanduser()
+    path = Path(os.getenv(name, default)).expanduser()
+    if path.is_absolute() and not path.exists():
+        try:
+            relative_to_app = path.relative_to("/app")
+        except ValueError:
+            return path
+        local_path = PROJECT_ROOT / relative_to_app
+        if local_path.exists():
+            return local_path
+    return path
 
 
 @dataclass(frozen=True)

@@ -165,13 +165,19 @@ nodes:
             timeout_seconds: 1800
             allow_failure: true
   - id: embedded-review
-    borg_name: Embedded Review
+    borg_name: Embedded Review Required
     role: reviewer
     agent: borg-requirement-node
     tasks:
       - id: review-embedded-output
-        title: Review embedded outputs
-        prompt: Review code changes, build logs, generated files, hardware safety risks, and commands needed for manual flashing. Never flash hardware automatically.
+        title: Review Required for embedded outputs
+        prompt: >-
+          Produce Review Required output with only Planned Changes and Review
+          Questions. Planned Changes must cover code changes, generated files,
+          hardware safety risks, build status, and manual flashing commands.
+          Review Questions must be concrete hardware or release decisions needed
+          from the developer. Never flash hardware automatically. Do not include
+          summaries, internal reasoning, or generic review text.
         status: draft
 steps:
   - id: intake-phase
@@ -210,7 +216,7 @@ steps:
       - stm32-validation
       - nordic-validation
   - id: review-phase
-    title: Human review handoff
+    title: Review Required
     mode: sequential
     nodes:
       - embedded-review

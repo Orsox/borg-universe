@@ -44,7 +44,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(api_router)
 
-    def get_ui_context(client: SupabaseRestClient | None = None) -> dict[str, Any]:
+    def get_ui_context(client: Any = None) -> dict[str, Any]:
         """Provides common UI context data like sidebar counts."""
         workbench_status = getattr(app.state, "workbench_status", settings.workbench_status)
         if client is None:
@@ -156,19 +156,25 @@ def create_app() -> FastAPI:
         except RuntimeError:
             orchestration = None
         
-        client = SupabaseRestClient(settings)
+        client: SupabaseRestClient | None = None
         projects: list[dict] = []
         tasks: list[dict] = []
         project_error = ""
         task_error = ""
         try:
-            projects = ProjectRepository(client).list_projects()
+            client = SupabaseRestClient(settings)
         except SupabaseRestError as exc:
             project_error = str(exc)
-        try:
-            tasks = TaskRepository(client).list_tasks()
-        except SupabaseRestError as exc:
             task_error = str(exc)
+        if client is not None:
+            try:
+                projects = ProjectRepository(client).list_projects()
+            except SupabaseRestError as exc:
+                project_error = str(exc)
+            try:
+                tasks = TaskRepository(client).list_tasks()
+            except SupabaseRestError as exc:
+                task_error = str(exc)
 
         processed_task_count = sum(1 for task in tasks if task.get("status") in {"done", "review_required"})
         active_task_count = sum(1 for task in tasks if task.get("status") == "running")
@@ -605,8 +611,11 @@ def _resolve_project_runtime_root(project_directory: str) -> Path | None:
     try:
         candidate = Path(text).expanduser()
     except Exception:
-        return None
-    return candidate if candidate.exists() else None
+        candidate = None
+    if candidate is not None and (candidate.exists() or candidate.parent.exists()):
+        return candidate
+
+    return candidate if candidate is not None and candidate.exists() else None
 
 
 def _map_workbench_path(host_path: str) -> Path | None:
@@ -804,14 +813,13 @@ def _start_task_processing(settings: Any, task_id: str) -> None:
 
 
 def _infer_workbench_container_path(normalized_host: str, container_root: str) -> Path | None:
-    marker = "/workbench/"
-    lowered = normalized_host.lower()
-    idx = lowered.find(marker)
+    marker = "/Workbench/"
+    idx = normalized_host.find(marker)
     if idx != -1:
         suffix = normalized_host[idx + len(marker) :]
         return Path(f"{container_root}/{suffix}") if suffix else Path(container_root)
 
-    if lowered.endswith("/workbench"):
+    if normalized_host.endswith("/Workbench"):
         return Path(container_root)
 
     return None

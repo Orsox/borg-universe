@@ -69,7 +69,7 @@ For each task:
 - require the implementation prompt to start with `<nano-implant>`
 - implement code changes
 - update or create tests
-- ensure build consistency
+- ensure build consistency and successful compilation; if compilation fails, do not report the task as done.
 - ensure no regression
 
 ## Workspace tool discipline

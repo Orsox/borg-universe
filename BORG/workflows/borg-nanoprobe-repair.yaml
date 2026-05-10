@@ -31,10 +31,11 @@ nodes:
           Constraints:
           - Do not assimilate unrelated code
           - Write or update tests to cover the repair
+          - Ensure the code compiles without errors
           - Verify repair resolves the defect without destabilizing adjacent systems
           - Do not report "no cube files identified" until you have searched the project for the correct borg-cube.md ownership
           - If no matching borg-cube.md exists, infer the owning module from repository evidence and create one when confidence is high
-          - When a new borg-cube.md is created, explain in the review text that it was missing, where it was written, and why that location was selected
+          - When a new borg-cube.md is created, include its path and ownership decision under Planned Changes
           - If confidence is too low for safe cube creation, return a specific follow-up task for targeted repository inspection
           - Report root cause, modified components, and validation results
         status: draft
@@ -47,11 +48,36 @@ nodes:
         title: Validate nanoprobe repair integrity
         prompt: >-
           Goal: Validate that the repair correctly resolves the defect
-          Scope: Run diagnostics, check for destabilization, verify expected behavior
+          Scope: Run diagnostics, check for destabilization, verify build/compilation status, verify expected behavior
           Constraints:
           - All diagnostics must pass
+          - The code must compile without errors
           - No new anomalies or errors introduced
           - Produce a compact integrity report
+        status: draft
+  - id: target-test
+    borg_name: Target Programming Validation
+    role: verifier
+    agent: borg-programming-node
+    tasks:
+      - id: validate-repair-on-target
+        title: Program target and validate repaired behavior on hardware
+        prompt: >-
+          Use the project CLAUDE.md section borg-programming-node as the primary
+          source for target programming and hardware test procedure. If that
+          section is absent, fall back to borg-cube.md,
+          docs/PYTHON_EMBEDDED_HARNESS.md, repository scripts, build files, and
+          adjacent documentation. Determine the exact target, programming
+          command, runtime verification command, required environment variables,
+          and operator prerequisites for the repaired subsystem. Require
+          successful deterministic validation before hardware-near actions.
+          Execute the target test only when the target is connected and
+          explicit approval for hardware-near actions is available; otherwise
+          report a blocker with exact commands, manual steps, and missing
+          prerequisites. Never invent a flashing flow, never claim target
+          validation passed without recorded evidence, and produce a compact
+          target report with commands, observed behavior, artifact paths, and
+          retry_required when programming or runtime verification fails.
         status: draft
   - id: implementation-trigger
     borg_name: Implementation Trigger
@@ -78,3 +104,18 @@ steps:
     mode: sequential
     nodes:
       - integrity-scan
+    retry:
+      condition: nodes['integrity-scan'].output.retry_required == true
+      max_attempts: 10
+      target_node: nanoprobe-drone
+      message: 'Integrity scan failed. Re-run repair with these findings: {{nodes[''integrity-scan''].output.findings}}'
+  - id: target-validation
+    title: Target hardware validation
+    mode: sequential
+    nodes:
+      - target-test
+    retry:
+      condition: nodes['target-test'].output.retry_required == true
+      max_attempts: 10
+      target_node: nanoprobe-drone
+      message: 'Target validation failed. Re-run repair with these findings: {{nodes[''target-test''].output.findings}}'

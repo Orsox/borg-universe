@@ -59,6 +59,12 @@ Vor Restore-Vorgaengen Containerzustand und Zielumgebung pruefen. Diese Umgebung
 - Agenten: `/agents`
 - Skills: `/skills`
 
+## Human Interaction
+
+- Review checkpoints render only `Planned Changes` and `Review Questions`.
+- Targeted input pauses render as `Question Step` with optional short context and concrete questions.
+- See `docs/HUMAN_INTERACTION_WORKFLOWS.md` for the required output shapes.
+
 ## Grenzen
 
 - Keine Production-Konfiguration.
